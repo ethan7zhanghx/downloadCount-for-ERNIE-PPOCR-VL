@@ -713,11 +713,15 @@ def calculate_weekly_report(current_date=None, previous_date=None, model_order=N
         model_series=model_series
     )
 
-    # 统计模型数量（按类别、按是否原始）
+    # 统计模型数量（按类别、按是否原始）——衍生模型计数采用回填（取当前日期及之前的最后一条）
+    backfill_for_count = load_data_from_db(date_filter=current_date, last_value_per_model=True)
+    backfill_for_count = enforce_deduplication_and_standardization(backfill_for_count)
+    backfill_for_count = filter_by_series(backfill_for_count)
+    backfill_for_count = mark_official_models(backfill_for_count)
     derivative_current_total_models = len(
-        all_current_data[
-            (all_current_data['model_category'] == ('ernie-4.5' if model_series == 'ERNIE-4.5' else 'paddleocr-vl')) &
-            (all_current_data['model_type'] != 'original')
+        backfill_for_count[
+            (backfill_for_count['model_category'] == ('ernie-4.5' if model_series == 'ERNIE-4.5' else 'paddleocr-vl')) &
+            (backfill_for_count['model_type'] != 'original')
         ]
     )
 
