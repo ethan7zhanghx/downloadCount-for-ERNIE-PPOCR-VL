@@ -1,0 +1,36 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+.env
+*.egg-info/
+build/
+dist/
+
+# Editor artifacts
+.DS_Store
+.vscode/
+.idea/
+
+# Local data and exports (avoid committing sensitive datasets)
+*.db
+*.sqlite
+*.sqlite3
+*.xlsx
+backups/
+exports/
+Data/
+ernie_downloads.db
+scripts/ernie_downloads.db
+
+# Generated reports that may contain metrics
+scripts/paddle_attribution/*.csv
+scripts/paddle_attribution/*.png
+
+# Misc
+*.log
+*.tmp
+*.swp
