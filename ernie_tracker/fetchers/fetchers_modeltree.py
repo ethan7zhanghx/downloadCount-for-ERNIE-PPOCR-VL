@@ -504,6 +504,21 @@ def get_all_ernie_derivatives(include_paddleocr: bool = True) -> Tuple[pd.DataFr
 
         base_from_api = parse_base_from_card(card_data)
 
+        # 如果 cardData 中没有 base_model，尝试从 tags 中提取
+        if not base_from_api and tags:
+            for tag in tags:
+                if isinstance(tag, str) and tag.startswith('base_model:'):
+                    # 提取 base_model，格式如: base_model:PaddlePaddle/PaddleOCR-VL
+                    # 或 base_model:adapter:PaddlePaddle/PaddleOCR-VL
+                    parts = tag.split(':', 2)  # 最多分割成3部分
+                    if len(parts) >= 2:
+                        # base_model:ModelID 或 base_model:type:ModelID
+                        candidate = parts[-1]  # 取最后一部分作为 model ID
+                        # 验证是否是有效的 model ID 格式 (包含 /)
+                        if '/' in candidate and not candidate.startswith('license:'):
+                            base_from_api = candidate
+                            break
+
         model_category = classify_model(model_id, publisher, base_from_api)
         model_type = classify_model_type(model_id, tags, pipeline_tag, card_data)
 
@@ -651,6 +666,13 @@ def get_all_ernie_derivatives(include_paddleocr: bool = True) -> Tuple[pd.DataFr
                     continue
 
                 if deriv['id'] not in processed_ids:
+                    # 🔧 修复：使用 Model Tree 提供的 base_model 重新分类
+                    # 因为 fetch_model_detail 中的分类可能使用了错误的 base_from_api（可能为空）
+                    deriv_detail['model_category'] = classify_model(
+                        deriv['id'],
+                        deriv_detail['publisher'],
+                        model_id  # 使用 Model Tree 的 base_model，而不是 base_from_api
+                    )
                     add_record(deriv_detail, data_source='model_tree', base_model=model_id)
                 else:
                     # 更新已有记录为 both，补 base_model
@@ -659,6 +681,12 @@ def get_all_ernie_derivatives(include_paddleocr: bool = True) -> Tuple[pd.DataFr
                             existing['data_source'] = 'both'
                             existing['base_model'] = existing.get('base_model') or model_id
                             existing['is_derivative'] = True
+                            # 🔧 修复：也要重新分类已有记录
+                            existing['model_category'] = classify_model(
+                                deriv['id'],
+                                existing['publisher'],
+                                model_id
+                            )
                             break
 
         # 关键词补充搜索（按基座名）
@@ -668,6 +696,13 @@ def get_all_ernie_derivatives(include_paddleocr: bool = True) -> Tuple[pd.DataFr
             detail = fetch_model_detail(model.id, model)
             if detail is None:
                 continue
+            # 🔧 修复：使用当前基座的 model_id 重新分类
+            # 因为这是通过基座名称搜索到的，应该与当前基座相关
+            detail['model_category'] = classify_model(
+                model.id,
+                detail['publisher'],
+                model_id  # 使用当前基座的 model_id
+            )
             if not include_paddleocr and detail['model_category'] == 'paddleocr-vl':
                 continue
             # 强制认为与当前 base 相关（兜底补充）

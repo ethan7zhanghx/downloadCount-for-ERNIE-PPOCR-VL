@@ -683,6 +683,34 @@ elif page == "📊 ERNIE-4.5 分析":
                 else:
                     st.info("本周没有新增ERNIE-4.5模型")
 
+                # 🆕 已删除/隐藏的模型列表
+                st.markdown("### 🗑️ 已删除/隐藏的衍生模型")
+                st.info("📌 这些模型在历史记录中存在，但在当前日期已不可见（可能被删除或隐藏）")
+
+                from ernie_tracker.analysis import get_deleted_or_hidden_models
+                deleted_models = get_deleted_or_hidden_models(current_date, model_series='ERNIE-4.5')
+
+                if deleted_models:
+                    deleted_df = pd.DataFrame(deleted_models)
+                    deleted_df.index = deleted_df.index + 1
+
+                    # 重命名列
+                    column_mapping = {
+                        'model_name': '模型名称',
+                        'publisher': '发布者',
+                        'repo': '平台',
+                        'model_type': '模型类型',
+                        'base_model': '基础模型',
+                        'last_seen_date': '最后出现日期',
+                        'last_download_count': '最后下载量'
+                    }
+                    deleted_df = deleted_df.rename(columns={k: v for k, v in column_mapping.items() if k in deleted_df.columns})
+
+                    st.warning(f"⚠️ 发现 {len(deleted_models)} 个模型已被删除或隐藏")
+                    st.dataframe(deleted_df, use_container_width=True, height=400)
+                else:
+                    st.success("✅ 所有历史模型在当前日期仍然可见")
+
                 # 导出功能
                 st.markdown("### 💾 导出报表")
 
@@ -802,6 +830,14 @@ elif page == "📊 PaddleOCR-VL 分析":
                 """
                 st.markdown(summary_text)
 
+                # 累计/本周新增衍生模型数量
+                new_models_list_count = len(tables.get('all_new_models', pd.DataFrame()))
+                st.info(
+                    f"累计衍生模型：{int(stats.get('derivative_current_total_models', 0) or 0)} 个｜"
+                    f"本周新增衍生（HF非官方差集）：{int(stats.get('derivative_new_models', 0) or 0)} 个｜"
+                    f"新增列表展示：{new_models_list_count} 个"
+                )
+
                 # 社区和模型维度摘要
                 st.markdown("### 📈 社区与模型维度摘要")
                 community_summary = report_data['community_summary']
@@ -908,6 +944,34 @@ elif page == "📊 PaddleOCR-VL 分析":
                     st.dataframe(all_new_df, use_container_width=True, height=400)
                 else:
                     st.info("本周没有新增PaddleOCR-VL模型")
+
+                # 🆕 已删除/隐藏的模型列表
+                st.markdown("### 🗑️ 已删除/隐藏的衍生模型")
+                st.info("📌 这些模型在历史记录中存在，但在当前日期已不可见（可能被删除或隐藏）")
+
+                from ernie_tracker.analysis import get_deleted_or_hidden_models
+                deleted_models = get_deleted_or_hidden_models(current_date, model_series='PaddleOCR-VL')
+
+                if deleted_models:
+                    deleted_df = pd.DataFrame(deleted_models)
+                    deleted_df.index = deleted_df.index + 1
+
+                    # 重命名列
+                    column_mapping = {
+                        'model_name': '模型名称',
+                        'publisher': '发布者',
+                        'repo': '平台',
+                        'model_type': '模型类型',
+                        'base_model': '基础模型',
+                        'last_seen_date': '最后出现日期',
+                        'last_download_count': '最后下载量'
+                    }
+                    deleted_df = deleted_df.rename(columns={k: v for k, v in column_mapping.items() if k in deleted_df.columns})
+
+                    st.warning(f"⚠️ 发现 {len(deleted_models)} 个模型已被删除或隐藏")
+                    st.dataframe(deleted_df, use_container_width=True, height=400)
+                else:
+                    st.success("✅ 所有历史模型在当前日期仍然可见")
 
                 # 导出功能
                 st.markdown("### 💾 导出报表")

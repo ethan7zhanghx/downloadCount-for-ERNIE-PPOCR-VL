@@ -1015,3 +1015,178 @@ def calculate_paddleocr_vl_weekly_report(current_date=None, previous_date=None):
         model_order=PADDLEOCR_VL_MODEL_ORDER,
         model_series='PaddleOCR-VL'
     )
+
+
+def get_deleted_or_hidden_models(current_date, model_series='ERNIE-4.5'):
+    """
+    检测已被删除或隐藏的模型
+
+    逻辑：
+    - 使用回填模式（last_value_per_model=True）获取截止到当前日期的所有历史模型
+    - 使用正常模式（last_value_per_model=False）获取当前日期的实际数据
+    - 对比两者，找出在历史中存在但当前日期不存在的模型
+
+    Args:
+        current_date: 当前日期 (YYYY-MM-DD)
+        model_series: 模型系列 ('ERNIE-4.5' 或 'PaddleOCR-VL')
+
+    Returns:
+        list: 已删除/隐藏的模型列表，每个元素包含:
+            - model_name: 模型名称
+            - publisher: 发布者
+            - model_type: 模型类型
+            - model_category: 模型分类
+            - base_model: 基础模型
+            - last_seen_date: 最后出现日期
+            - last_download_count: 最后记录的下载量
+            - repo: 平台
+    """
+    try:
+        # 1. 获取所有历史模型（回填模式）
+        all_historical = load_data_from_db(date_filter=current_date, last_value_per_model=True)
+
+        # 2. 获取当前日期的实际数据
+        current_actual = load_data_from_db(date_filter=current_date, last_value_per_model=False)
+
+        if all_historical.empty:
+            return []
+
+        # 3. 筛选目标系列的衍生模型
+        target_category = 'ernie-4.5' if model_series == 'ERNIE-4.5' else 'paddleocr-vl'
+
+        # 历史中的衍生模型
+        historical_derivatives = all_historical[
+            (all_historical['model_category'] == target_category) &
+            (all_historical['model_type'] != 'original')
+        ].copy()
+
+        # 当前日期的衍生模型
+        current_derivatives = current_actual[
+            (current_actual['model_category'] == target_category) &
+            (current_actual['model_type'] != 'original')
+        ].copy()
+
+        if historical_derivatives.empty:
+            return []
+
+        # 3.5. 应用与周报相同的标准化逻辑
+        # 标准化 publisher 名称
+        historical_derivatives['publisher'] = historical_derivatives['publisher'].astype(str).apply(
+            lambda x: x.title() if x.lower() != 'nan' else x
+        )
+        if not current_derivatives.empty:
+            current_derivatives['publisher'] = current_derivatives['publisher'].astype(str).apply(
+                lambda x: x.title() if x.lower() != 'nan' else x
+            )
+
+        # 标准化模型名称
+        historical_derivatives = normalize_model_names(historical_derivatives)
+        if not current_derivatives.empty:
+            current_derivatives = normalize_model_names(current_derivatives)
+
+        # 去重（按下载量降序，保留最高的）
+        historical_derivatives['download_count'] = pd.to_numeric(
+            historical_derivatives['download_count'], errors='coerce'
+        ).fillna(0)
+        historical_derivatives = historical_derivatives.sort_values(
+            by='download_count', ascending=False
+        ).drop_duplicates(
+            subset=['date', 'repo', 'publisher', 'model_name'], keep='first'
+        )
+
+        if not current_derivatives.empty:
+            current_derivatives['download_count'] = pd.to_numeric(
+                current_derivatives['download_count'], errors='coerce'
+            ).fillna(0)
+            current_derivatives = current_derivatives.sort_values(
+                by='download_count', ascending=False
+            ).drop_duplicates(
+                subset=['date', 'repo', 'publisher', 'model_name'], keep='first'
+            )
+
+        # 4. 创建模型唯一标识 (repo, publisher, model_name)
+        historical_derivatives['model_key'] = (
+            historical_derivatives['repo'] + '|||' +
+            historical_derivatives['publisher'] + '|||' +
+            historical_derivatives['model_name']
+        )
+
+        if not current_derivatives.empty:
+            current_derivatives['model_key'] = (
+                current_derivatives['repo'] + '|||' +
+                current_derivatives['publisher'] + '|||' +
+                current_derivatives['model_name']
+            )
+            current_keys = set(current_derivatives['model_key'].unique())
+        else:
+            current_keys = set()
+
+        historical_keys = set(historical_derivatives['model_key'].unique())
+
+        # 5. 找出已删除/隐藏的模型
+        deleted_keys = historical_keys - current_keys
+
+        if not deleted_keys:
+            return []
+
+        # 6. 获取已删除模型的详细信息
+        deleted_models = historical_derivatives[
+            historical_derivatives['model_key'].isin(deleted_keys)
+        ].copy()
+
+        # 7. 对于每个已删除的模型，找到它最后出现的日期
+        deleted_models_info = []
+
+        for _, row in deleted_models.iterrows():
+            model_key_parts = row['model_key'].split('|||')
+            repo = model_key_parts[0]
+            publisher = model_key_parts[1]
+            model_name = model_key_parts[2]
+
+            # 查询该模型在数据库中最后出现的日期
+            # 使用 LOWER() 进行不区分大小写的匹配，因为标准化后的 publisher 可能与数据库中的原始值大小写不同
+            conn = sqlite3.connect(DB_PATH)
+            query = """
+                SELECT date, download_count
+                FROM model_downloads
+                WHERE repo = ? AND LOWER(publisher) = LOWER(?) AND model_name = ?
+                ORDER BY date DESC
+                LIMIT 1
+            """
+            result = pd.read_sql_query(query, conn, params=(repo, publisher, model_name))
+            conn.close()
+
+            if not result.empty:
+                last_seen_date = result.iloc[0]['date']
+                last_download_count = result.iloc[0]['download_count']
+            else:
+                last_seen_date = row.get('date', 'Unknown')
+                last_download_count = row.get('download_count', 0)
+
+            model_info = {
+                'model_name': model_name,
+                'publisher': publisher,
+                'model_type': row.get('model_type', 'unknown'),
+                'model_category': row.get('model_category', ''),
+                'base_model': row.get('base_model', ''),
+                'last_seen_date': last_seen_date,
+                'last_download_count': int(last_download_count) if pd.notna(last_download_count) else 0,
+                'repo': repo
+            }
+
+            deleted_models_info.append(model_info)
+
+        # 8. 按最后出现日期降序排序
+        deleted_models_info = sorted(
+            deleted_models_info,
+            key=lambda x: x['last_seen_date'],
+            reverse=True
+        )
+
+        return deleted_models_info
+
+    except Exception as e:
+        print(f"检测已删除/隐藏模型失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
