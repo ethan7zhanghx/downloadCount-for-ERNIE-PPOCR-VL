@@ -1959,16 +1959,22 @@ elif page == "🗄️ 数据库管理":
                                     st.warning("⚠️ 确认删除？请再次点击确认！")
                                     st.session_state["confirm_delete_edit"] = True
 
+
 # ================= 衍生模型生态分析模块 =================
 elif page == "🌳 衍生模型生态":
-    from ernie_tracker.analysis import get_available_dates
-    from ernie_tracker.model_analysis import analyze_derivative_ecosystem, OFFICIAL_MODEL_GROUPS
+    from ernie_tracker.analysis import (
+        get_available_dates,
+        analyze_derivative_models_all_platforms,
+        calculate_periodic_stats,
+        get_deleted_derivative_models_all_platforms,
+        get_models_needing_backfill
+    )
     import plotly.express as px
     import plotly.graph_objects as go
     from io import BytesIO
 
-    st.markdown("## 🌳 衍生模型生态分析")
-    st.info("📊 分析 ERNIE-4.5 和 PaddleOCR-VL 的衍生模型生态，包括 Finetune、Adapter、量化模型等。支持按模型系列筛选，可单独分析 ERNIE-4.5 或 PaddleOCR-VL。")
+    st.markdown("## 🌳 衍生模型生态分析（全平台）")
+    st.info("📊 分析全平台（Hugging Face、ModelScope、AI Studio、GitCode、鲸智、魔乐、Gitee）的衍生模型生态。衍生模型定义：非官方发布者发布的模型。")
 
     # 获取可用日期
     available_dates = get_available_dates()
@@ -1989,23 +1995,13 @@ elif page == "🌳 衍生模型生态":
             )
 
         with col_config2:
-            # 数据源筛选
-            data_source_filter = st.radio(
-                "📂 数据来源筛选",
-                options=["全部模型", "仅 Model Tree"],
-                index=0,
-                horizontal=True,
-                help="选择要分析的模型范围"
+            # 模型系列筛选
+            selected_series = st.multiselect(
+                "🎯 模型系列筛选",
+                options=["ERNIE-4.5", "PaddleOCR-VL"],
+                default=["ERNIE-4.5", "PaddleOCR-VL"],
+                help="可以选择一个或多个模型系列进行分析"
             )
-
-        # 模型系列筛选
-        st.markdown("#### 🎯 模型系列筛选")
-        selected_series = st.multiselect(
-            "选择要分析的模型系列",
-            options=["ERNIE-4.5", "PaddleOCR-VL", "其他ERNIE"],
-            default=["ERNIE-4.5", "PaddleOCR-VL"],
-            help="可以选择一个或多个模型系列进行分析"
-        )
 
         if not selected_series:
             st.warning("⚠️ 请至少选择一个模型系列")
@@ -2013,361 +2009,341 @@ elif page == "🌳 衍生模型生态":
 
         # 显示筛选说明
         series_info = "、".join(selected_series)
-        if data_source_filter == "仅 Model Tree":
-            st.info(f"🌳 **Model Tree 模式** | 📊 **分析系列**: {series_info} | 仅分析通过 Model Tree 找到的衍生模型（有明确的 base_model 关系）")
-        else:
-            st.info(f"🔍 **全部模型模式** | 📊 **分析系列**: {series_info} | 分析所有相关模型（包括通过搜索和 Model Tree 发现的）")
+        st.info(f"📊 **分析系列**: {series_info} | **数据范围**: 所有平台 | **衍生模型定义**: 非官方发布者发布的模型")
 
         if st.button("🔍 开始分析", type="primary"):
             with st.spinner("正在分析衍生模型生态..."):
-                # 加载数据
-                df = load_data_from_db(date_filter=selected_date)
+                # 加载数据（使用回填逻辑）
+                df = load_data_from_db(date_filter=selected_date, last_value_per_model=True)
 
                 if df.empty:
                     st.error(f"❌ {selected_date} 没有数据")
                 else:
-                    # 筛选 HuggingFace 平台的 ERNIE 和 PaddleOCR 相关数据
-                    hf_df = df[df['repo'] == 'Hugging Face'].copy()
+                    st.success(f"✅ 加载了 {len(df)} 条记录")
 
-                    if hf_df.empty:
-                        st.warning("⚠️ 该日期没有 Hugging Face 平台的数据")
-                    else:
-                        # 根据数据源筛选选项过滤数据
-                        if data_source_filter == "仅 Model Tree":
-                            # 只保留通过 Model Tree 找到的模型（data_source = 'model_tree' 或 'both'）
-                            # 或者至少要有 base_model 的记录
-                            if 'data_source' in hf_df.columns:
-                                hf_df = hf_df[
-                                    (hf_df['data_source'].isin(['model_tree', 'both'])) |
-                                    (hf_df['base_model'].notna() & (hf_df['base_model'] != '') & (hf_df['base_model'] != 'None'))
-                                ].copy()
+                    # 使用新的分析函数
+                    analysis_result = analyze_derivative_models_all_platforms(df, selected_series=selected_series)
+
+                    if analysis_result['total_models'] == 0:
+                        st.warning(f"⚠️ 没有找到符合选择的模型系列（{series_info}）的数据")
+                        st.stop()
+
+                    st.success(f"✅ 分析完成！分析日期：{selected_date}")
+
+                    # ========== 1. 总体概览 ==========
+                    st.markdown("### 📊 总体概览")
+
+                    col1, col2, col3 = st.columns(3)
+
+                    with col1:
+                        st.metric("总模型数", f"{analysis_result['total_models']:,}")
+
+                    with col2:
+                        st.metric("衍生模型数", f"{analysis_result['total_derivative_models']:,}")
+
+                    with col3:
+                        st.metric("衍生率", f"{analysis_result['derivative_rate']:.1f}%")
+
+                    st.markdown("---")
+
+                    # ========== 2. 周期性统计（本周新增、当前季度新增） ==========
+                    st.markdown("### 📅 周期性统计")
+
+                    with st.spinner("正在计算周期性统计和检测删除模型..."):
+                        # 先获取已删除模型列表，用于统计
+                        deleted_models = get_deleted_derivative_models_all_platforms(
+                            selected_date,
+                            selected_series=selected_series
+                        )
+
+                        # 按系列统计已删除模型数量
+                        deleted_by_category = {}
+                        for model in deleted_models:
+                            cat = model.get('model_category', '')
+                            deleted_by_category[cat] = deleted_by_category.get(cat, 0) + 1
+
+                        # 计算周期性统计
+                        periodic_stats = calculate_periodic_stats(selected_date, selected_series=selected_series)
+
+                        if periodic_stats:
+                            # 显示总体统计摘要
+                            total_deleted = len(deleted_models)
+                            current_available = periodic_stats['total_count'] - total_deleted
+
+                            if total_deleted > 0:
+                                summary_text = f"""
+                                **截止 {selected_date}**，累计出现过衍生模型 **{periodic_stats['total_count']:,}** 个（当前可用 **{current_available:,}** 个，已删除 **{total_deleted:,}** 个），
+                                本周新增 **{periodic_stats['weekly_new_count']:,}** 个，
+                                {periodic_stats['quarter_name']} 新增 **{periodic_stats['quarter_new_count']:,}** 个
+                                """
                             else:
-                                # 如果没有 data_source 列，使用 base_model 判断
-                                hf_df = hf_df[
-                                    hf_df['base_model'].notna() &
-                                    (hf_df['base_model'] != '') &
-                                    (hf_df['base_model'] != 'None')
-                                ].copy()
+                                summary_text = f"""
+                                **截止 {selected_date}**，累计衍生模型 **{periodic_stats['total_count']:,}** 个，
+                                本周新增 **{periodic_stats['weekly_new_count']:,}** 个，
+                                {periodic_stats['quarter_name']} 新增 **{periodic_stats['quarter_new_count']:,}** 个
+                                """
 
-                            if hf_df.empty:
-                                st.warning("⚠️ 该日期没有 Model Tree 衍生模型数据")
-                                st.stop()
+                            st.markdown(summary_text)
 
-                            st.success(f"✅ 筛选后共 {len(hf_df)} 个 Model Tree 衍生模型")
-                        else:
-                            st.success(f"✅ 共 {len(hf_df)} 个 HuggingFace 模型")
+                            # 按系列详细统计
+                            if periodic_stats['stats_by_series']:
+                                st.markdown("#### 📊 分系列统计")
+                                for category, stats in periodic_stats['stats_by_series'].items():
+                                    deleted_count = deleted_by_category.get(category, 0)
+                                    available_count = stats['total_count'] - deleted_count
 
-                        # 根据模型系列筛选
-                        if 'model_category' in hf_df.columns:
-                            # 映射用户选择到 model_category 值
-                            series_mapping = {
-                                "ERNIE-4.5": "ernie-4.5",
-                                "PaddleOCR-VL": "paddleocr-vl",
-                                "其他ERNIE": "other-ernie"
-                            }
-                            selected_categories = [series_mapping[s] for s in selected_series if s in series_mapping]
+                                    if deleted_count > 0:
+                                        detail_text = f"（当前可用 **{available_count:,}** 个，已删除 **{deleted_count:,}** 个）"
+                                    else:
+                                        detail_text = ""
 
-                            if selected_categories:
-                                hf_df = hf_df[hf_df['model_category'].isin(selected_categories)].copy()
+                                    st.markdown(f"""
+                                    - **{category}** 衍生模型累计 **{stats['total_count']:,}** 个{detail_text}，
+                                      本周新增 **{stats['weekly_new_count']:,}** 个，
+                                      {periodic_stats['quarter_name']} 新增 **{stats['quarter_new_count']:,}** 个
+                                    """)
 
-                                if hf_df.empty:
-                                    st.warning(f"⚠️ 没有找到符合选择的模型系列（{series_info}）的数据")
-                                    st.stop()
+                            # 本周新增模型列表
+                            if periodic_stats['weekly_new_models']:
+                                with st.expander(f"📋 本周新增模型列表 ({periodic_stats['weekly_new_count']} 个)", expanded=False):
+                                    weekly_new_df = pd.DataFrame(periodic_stats['weekly_new_models'])
+                                    weekly_new_df['download_count'] = pd.to_numeric(
+                                        weekly_new_df['download_count'], errors='coerce'
+                                    ).fillna(0).astype(int)
+                                    weekly_new_df = weekly_new_df.sort_values('download_count', ascending=False)
+                                    st.dataframe(weekly_new_df, use_container_width=True, height=300)
+                            else:
+                                st.info("✅ 本周暂无新增衍生模型")
 
-                                st.info(f"🎯 模型系列筛选后: {len(hf_df)} 个模型")
+                    st.markdown("---")
 
-                        # 进行衍生生态分析
-                        analysis_result = analyze_derivative_ecosystem(hf_df, infer_missing=True)
+                    # ========== 3. 已删除模型检测 ==========
+                    st.markdown("### 🗑️ 已删除模型")
 
-                        st.success(f"✅ 分析完成！分析日期：{selected_date}")
+                    # 使用之前已经获取的 deleted_models
+                    if deleted_models:
+                        st.warning(f"⚠️ 检测到 {len(deleted_models)} 个模型已被删除或隐藏")
+                        with st.expander(f"📋 已删除模型列表 ({len(deleted_models)} 个)", expanded=False):
+                            deleted_df = pd.DataFrame(deleted_models)
+                            deleted_df['last_download_count'] = pd.to_numeric(
+                                deleted_df['last_download_count'], errors='coerce'
+                            ).fillna(0).astype(int)
+                            st.dataframe(deleted_df, use_container_width=True, height=300)
+                    else:
+                        st.success("✅ 未检测到已删除的模型")
 
-                        # ========== 1. 总体概览 ==========
-                        st.markdown("### 📊 总体概览")
+                    st.markdown("---")
 
-                        col1, col2, col3, col4 = st.columns(4)
+                    # ========== 4. 需要回填的模型 ==========
+                    st.markdown("### 🔄 需要回填的模型")
 
-                        total_models = len(hf_df)
-                        derivative_models = analysis_result['total_derivatives']
-                        inferred_models = analysis_result['total_inferred']
-                        official_models = len(hf_df[hf_df.get('model_type') == 'original']) if 'model_type' in hf_df.columns else 0
+                    with st.spinner("正在检测需要回填的模型..."):
+                        models_needing_backfill = get_models_needing_backfill(
+                            selected_date,
+                            selected_series=selected_series
+                        )
 
-                        with col1:
-                            st.metric("总模型数", f"{total_models:,}")
-
-                        with col2:
-                            st.metric("衍生模型数", f"{derivative_models:,}")
-
-                        with col3:
-                            derivative_rate = (derivative_models / total_models * 100) if total_models > 0 else 0
-                            st.metric("衍生率", f"{derivative_rate:.1f}%")
-
-                        with col4:
-                            st.metric("推断的 base_model", f"{inferred_models:,}")
-
-                        st.markdown("---")
-
-                        # ========== 2. 按 model_category 统计 ==========
-                        st.markdown("### 📈 按模型系列分类")
-
-                        if 'model_category' in hf_df.columns:
-                            category_counts = hf_df[hf_df['model_category'].notna()]['model_category'].value_counts()
-
-                            if not category_counts.empty:
-                                col_chart1, col_chart2 = st.columns([1, 1])
-
-                                with col_chart1:
-                                    # 饼图
-                                    fig_pie = px.pie(
-                                        values=category_counts.values,
-                                        names=category_counts.index,
-                                        title="模型系列分布",
-                                        hole=0.3
-                                    )
-                                    fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-                                    st.plotly_chart(fig_pie, use_container_width=True)
-
-                                with col_chart2:
-                                    # 表格
-                                    category_df = pd.DataFrame({
-                                        '模型系列': category_counts.index,
-                                        '数量': category_counts.values,
-                                        '占比': [f"{v/category_counts.sum()*100:.1f}%" for v in category_counts.values]
-                                    })
-                                    st.dataframe(category_df, use_container_width=True, height=250)
-
-                        st.markdown("---")
-
-                        # ========== 3. 按 model_type 统计 ==========
-                        st.markdown("### 🔧 按模型类型分类")
-                        st.info("📌 统计衍生模型类型，不包括官方原始模型（original）")
-
-                        if 'model_type' in hf_df.columns:
-                            # 过滤掉 'original' 类型（官方原始模型）
-                            type_df_filtered = hf_df[
-                                hf_df['model_type'].notna() &
-                                (hf_df['model_type'] != 'original')
-                            ]
-                            type_counts = type_df_filtered['model_type'].value_counts()
-
-                            if not type_counts.empty:
-                                col_chart3, col_chart4 = st.columns([1, 1])
-
-                                with col_chart3:
-                                    # 柱状图
-                                    fig_bar = px.bar(
-                                        x=type_counts.index,
-                                        y=type_counts.values,
-                                        title="模型类型分布",
-                                        labels={'x': '模型类型', 'y': '数量'},
-                                        text=type_counts.values
-                                    )
-                                    fig_bar.update_traces(texttemplate='%{text}', textposition='outside')
-                                    fig_bar.update_layout(showlegend=False)
-                                    st.plotly_chart(fig_bar, use_container_width=True)
-
-                                with col_chart4:
-                                    # 表格
-                                    type_df = pd.DataFrame({
-                                        '模型类型': type_counts.index,
-                                        '数量': type_counts.values,
-                                        '占比': [f"{v/type_counts.sum()*100:.1f}%" for v in type_counts.values]
-                                    })
-
-                                    # 添加类型说明
-                                    type_labels = {
-                                        'quantized': '量化模型',
-                                        'finetune': '微调模型',
-                                        'adapter': 'Adapter模型',
-                                        'lora': 'LoRA模型',
-                                        'merge': '合并模型',
-                                        'original': '官方原始',
-                                        'other': '其他'
-                                    }
-                                    type_df['说明'] = type_df['模型类型'].map(type_labels).fillna('未知')
-
-                                    st.dataframe(type_df, use_container_width=True, height=250)
-
-                        st.markdown("---")
-
-                        # ========== 4. 按官方模型分组统计 ==========
-                        st.markdown("### 🏷️ 按官方模型分组统计")
-                        st.info("📌 统计每个官方模型的衍生生态情况")
-
-                        # 显示汇总表格
-                        group_summary_data = []
-                        for group_name, group_data in analysis_result['by_group'].items():
-                            if group_data['total'] > 0:
-                                group_summary_data.append({
-                                    '模型分组': group_name,
-                                    '衍生模型总数': group_data['total'],
-                                    'Quantized': group_data['by_type'].get('quantized', 0),
-                                    'Finetune': group_data['by_type'].get('finetune', 0),
-                                    'Adapter': group_data['by_type'].get('adapter', 0),
-                                    'Merge': group_data['by_type'].get('merge', 0),
-                                    'Other': group_data['by_type'].get('other', 0)
+                        if models_needing_backfill:
+                            st.info(f"📊 检测到 {len(models_needing_backfill)} 个模型的当前下载量低于历史最大值")
+                            with st.expander(f"📋 需要回填的模型列表 ({len(models_needing_backfill)} 个)", expanded=False):
+                                backfill_df = pd.DataFrame(models_needing_backfill)
+                                backfill_df['差值'] = backfill_df['max_download_count'] - backfill_df['current_download_count']
+                                backfill_df = backfill_df.rename(columns={
+                                    'model_name': '模型名称',
+                                    'publisher': '发布者',
+                                    'model_category': '模型系列',
+                                    'repo': '平台',
+                                    'current_download_count': '当前下载量',
+                                    'max_download_count': '历史最大下载量',
+                                    'max_download_date': '最大下载量日期'
                                 })
-
-                        if group_summary_data:
-                            summary_df = pd.DataFrame(group_summary_data)
-                            st.dataframe(summary_df, use_container_width=True)
-
-                            # 可视化：各分组的衍生模型数量对比
-                            fig_group = px.bar(
-                                summary_df,
-                                x='模型分组',
-                                y='衍生模型总数',
-                                title="各官方模型分组的衍生模型数量",
-                                text='衍生模型总数'
-                            )
-                            fig_group.update_traces(texttemplate='%{text}', textposition='outside')
-                            fig_group.update_layout(showlegend=False)
-                            st.plotly_chart(fig_group, use_container_width=True)
-
-                            # 详细展开
-                            st.markdown("#### 📋 各分组详细信息")
-
-                            for group_name, group_data in analysis_result['by_group'].items():
-                                if group_data['total'] > 0:
-                                    with st.expander(f"🔍 {group_name} ({group_data['total']} 个衍生模型)", expanded=False):
-                                        st.markdown(f"**包含的官方模型：**")
-                                        for base_model in group_data['base_models']:
-                                            st.markdown(f"- `{base_model}`")
-
-                                        st.markdown(f"\n**类型分布：**")
-                                        type_dist_data = []
-                                        for model_type, count in sorted(group_data['by_type'].items(), key=lambda x: x[1], reverse=True):
-                                            percentage = (count / group_data['total']) * 100
-                                            type_dist_data.append({
-                                                '类型': model_type,
-                                                '数量': count,
-                                                '占比': f"{percentage:.1f}%"
-                                            })
-
-                                        st.dataframe(pd.DataFrame(type_dist_data), use_container_width=True)
-
-                                        if group_data['by_data_source']:
-                                            st.markdown(f"\n**数据来源：**")
-                                            source_labels = {
-                                                'search': '搜索发现',
-                                                'model_tree': 'Model Tree',
-                                                'both': '搜索+Model Tree'
-                                            }
-                                            for source, count in group_data['by_data_source'].items():
-                                                label = source_labels.get(source, source)
-                                                st.markdown(f"- {label}: {count} 个")
-
-                                        st.markdown(f"\n**样本模型（前10个）：**")
-                                        if group_data['models']:
-                                            samples = group_data['models'][:10]
-                                            sample_df = pd.DataFrame(samples)
-                                            sample_df['download_count'] = sample_df['download_count'].apply(lambda x: int(x) if pd.notna(x) else 0)
-                                            st.dataframe(sample_df, use_container_width=True)
+                                st.dataframe(backfill_df, use_container_width=True, height=300)
                         else:
-                            st.info("暂无衍生模型数据")
+                            st.success("✅ 所有模型的下载量均为历史最大值，无需回填")
 
-                        st.markdown("---")
+                    st.markdown("---")
 
-                        # ========== 5. 衍生模型详细列表 ==========
-                        st.markdown("### 📋 衍生模型详细列表")
+                    # ========== 5. 按平台统计 ==========
+                    st.markdown("### 🌍 按平台统计")
 
-                        # 获取所有衍生模型
-                        derivatives = hf_df[
-                            hf_df['base_model'].notna() &
-                            (hf_df['base_model'] != '') &
-                            (hf_df['base_model'] != 'None')
-                        ].copy()
-
-                        if not derivatives.empty:
-                            # 筛选器
-                            col_filter1, col_filter2, col_filter3 = st.columns(3)
-
-                            with col_filter1:
-                                category_options = ['全部'] + sorted(derivatives['model_category'].dropna().unique().tolist())
-                                selected_category = st.selectbox("筛选模型系列", category_options, key="filter_category")
-
-                            with col_filter2:
-                                type_options = ['全部'] + sorted(derivatives['model_type'].dropna().unique().tolist())
-                                selected_type = st.selectbox("筛选模型类型", type_options, key="filter_type")
-
-                            with col_filter3:
-                                base_options = ['全部'] + sorted(derivatives['base_model'].dropna().unique().tolist())
-                                selected_base = st.selectbox("筛选基础模型", base_options, key="filter_base")
-
-                            # 应用筛选
-                            filtered_derivatives = derivatives.copy()
-
-                            if selected_category != '全部':
-                                filtered_derivatives = filtered_derivatives[filtered_derivatives['model_category'] == selected_category]
-
-                            if selected_type != '全部':
-                                filtered_derivatives = filtered_derivatives[filtered_derivatives['model_type'] == selected_type]
-
-                            if selected_base != '全部':
-                                filtered_derivatives = filtered_derivatives[filtered_derivatives['base_model'] == selected_base]
-
-                            st.info(f"📊 共 {len(filtered_derivatives)} 个衍生模型符合筛选条件")
-
-                            # 选择要显示的列
-                            display_cols = ['model_name', 'publisher', 'download_count', 'model_type',
-                                          'model_category', 'base_model', 'data_source']
-                            available_cols = [col for col in display_cols if col in filtered_derivatives.columns]
-
-                            display_df = filtered_derivatives[available_cols].copy()
-                            display_df['download_count'] = display_df['download_count'].apply(lambda x: int(x) if pd.notna(x) else 0)
-                            display_df = display_df.sort_values('download_count', ascending=False)
-
-                            # 显示列名中文化
-                            display_df = display_df.rename(columns={
-                                'model_name': '模型名称',
-                                'publisher': '发布者',
-                                'download_count': '下载量',
-                                'model_type': '模型类型',
-                                'model_category': '模型系列',
-                                'base_model': '基础模型',
-                                'data_source': '数据来源'
+                    if analysis_result['by_platform']:
+                        # 创建平台统计表格
+                        platform_data = []
+                        for platform, stats in analysis_result['by_platform'].items():
+                            platform_data.append({
+                                '平台': platform,
+                                '总模型数': stats['total_models'],
+                                '官方模型': stats['official_models'],
+                                '衍生模型': stats['derivative_models'],
+                                '衍生率': f"{stats['derivative_rate']:.1f}%",
+                                '衍生模型总下载量': f"{stats['total_downloads']:,}"
                             })
 
-                            st.dataframe(display_df, use_container_width=True, height=400)
+                        platform_df = pd.DataFrame(platform_data)
+                        platform_df = platform_df.sort_values('衍生模型', ascending=False)
 
-                            # ========== 6. 导出功能 ==========
-                            st.markdown("### 💾 导出分析结果")
+                        # 展示表格
+                        st.dataframe(platform_df, use_container_width=True, height=300)
 
-                            col_export1, col_export2 = st.columns([3, 1])
+                        # 可视化：衍生模型数量对比
+                        col_chart1, col_chart2 = st.columns(2)
 
-                            with col_export2:
-                                # 导出到 Excel
-                                output = BytesIO()
-                                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                                    # Sheet 1: 总体概览
-                                    overview_data = {
-                                        '指标': ['总模型数', '衍生模型数', '衍生率', '推断的base_model数'],
-                                        '数值': [total_models, derivative_models, f"{derivative_rate:.1f}%", inferred_models]
-                                    }
-                                    pd.DataFrame(overview_data).to_excel(writer, sheet_name='总体概览', index=False)
+                        with col_chart1:
+                            fig_platform = px.bar(
+                                platform_df,
+                                x='平台',
+                                y='衍生模型',
+                                title="各平台衍生模型数量",
+                                text='衍生模型'
+                            )
+                            fig_platform.update_traces(texttemplate='%{text}', textposition='outside')
+                            fig_platform.update_layout(showlegend=False)
+                            st.plotly_chart(fig_platform, use_container_width=True)
 
-                                    # Sheet 2: 模型系列分布
-                                    if 'model_category' in hf_df.columns:
-                                        category_df.to_excel(writer, sheet_name='模型系列分布', index=False)
+                        with col_chart2:
+                            fig_rate = px.bar(
+                                platform_df,
+                                x='平台',
+                                y=platform_df['衍生率'].str.rstrip('%').astype(float),
+                                title="各平台衍生率",
+                                labels={'y': '衍生率 (%)'},
+                                text=platform_df['衍生率']
+                            )
+                            fig_rate.update_traces(texttemplate='%{text}', textposition='outside')
+                            fig_rate.update_layout(showlegend=False)
+                            st.plotly_chart(fig_rate, use_container_width=True)
 
-                                    # Sheet 3: 模型类型分布
-                                    if 'model_type' in hf_df.columns:
-                                        type_df.to_excel(writer, sheet_name='模型类型分布', index=False)
+                        # ========== 6. 各平台Top模型 ==========
+                        st.markdown("### 🏆 各平台下载量Top模型")
 
-                                    # Sheet 4: 分组汇总
-                                    if group_summary_data:
-                                        summary_df.to_excel(writer, sheet_name='分组汇总', index=False)
+                        for platform, stats in analysis_result['by_platform'].items():
+                            if stats['derivative_models'] > 0 and stats['top_models']:
+                                with st.expander(f"📊 {platform} (衍生模型: {stats['derivative_models']} 个)", expanded=False):
+                                    top_models_df = pd.DataFrame(stats['top_models'])
+                                    if not top_models_df.empty:
+                                        top_models_df['download_count'] = pd.to_numeric(
+                                            top_models_df['download_count'], errors='coerce'
+                                        ).fillna(0).astype(int)
+                                        st.dataframe(top_models_df, use_container_width=True)
+                                    else:
+                                        st.info("暂无数据")
 
-                                    # Sheet 5: 衍生模型详细列表
-                                    display_df.to_excel(writer, sheet_name='衍生模型列表', index=False)
+                    st.markdown("---")
 
-                                excel_data = output.getvalue()
+                    # ========== 7. 按系列统计 ==========
+                    if analysis_result['by_series']:
+                        st.markdown("### 📈 按模型系列统计")
 
-                                st.download_button(
-                                    label="📥 下载完整报告",
-                                    data=excel_data,
-                                    file_name=f"衍生模型生态分析_{selected_date}.xlsx",
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    use_container_width=True
+                        series_data = []
+                        for series, stats in analysis_result['by_series'].items():
+                            series_data.append({
+                                '模型系列': series,
+                                '总模型数': stats['total_models'],
+                                '官方模型': stats['official_models'],
+                                '衍生模型': stats['derivative_models'],
+                                '衍生率': f"{stats['derivative_rate']:.1f}%"
+                            })
+
+                        series_df = pd.DataFrame(series_data)
+                        st.dataframe(series_df, use_container_width=True)
+
+                        st.markdown("---")
+
+                    # ========== 8. 衍生模型详细列表 ==========
+                    st.markdown("### 📋 衍生模型详细列表")
+
+                    derivative_models_df = analysis_result['derivative_models_df']
+
+                    if not derivative_models_df.empty:
+                        # 筛选器
+                        col_filter1, col_filter2 = st.columns(2)
+
+                        with col_filter1:
+                            platform_options = ['全部'] + sorted(derivative_models_df['repo'].unique().tolist())
+                            selected_platform = st.selectbox("筛选平台", platform_options, key="filter_platform")
+
+                        with col_filter2:
+                            if 'model_category' in derivative_models_df.columns:
+                                category_options = ['全部'] + sorted(
+                                    derivative_models_df['model_category'].dropna().unique().tolist()
                                 )
-                        else:
-                            st.info("该日期没有衍生模型数据")
+                                selected_category = st.selectbox("筛选模型系列", category_options, key="filter_category")
+                            else:
+                                selected_category = '全部'
+
+                        # 应用筛选
+                        filtered_derivatives = derivative_models_df.copy()
+
+                        if selected_platform != '全部':
+                            filtered_derivatives = filtered_derivatives[
+                                filtered_derivatives['repo'] == selected_platform
+                            ]
+
+                        if selected_category != '全部' and 'model_category' in filtered_derivatives.columns:
+                            filtered_derivatives = filtered_derivatives[
+                                filtered_derivatives['model_category'] == selected_category
+                            ]
+
+                        st.info(f"📊 共 {len(filtered_derivatives)} 个衍生模型符合筛选条件")
+
+                        # 选择要显示的列
+                        display_cols = ['model_name', 'publisher', 'repo', 'download_count']
+                        if 'model_category' in filtered_derivatives.columns:
+                            display_cols.append('model_category')
+
+                        # 确保所有列都存在
+                        display_cols = [col for col in display_cols if col in filtered_derivatives.columns]
+
+                        # 转换下载量为数值类型用于排序
+                        filtered_derivatives['download_count_num'] = pd.to_numeric(
+                            filtered_derivatives['download_count'], errors='coerce'
+                        ).fillna(0)
+
+                        # 按下载量降序排序
+                        display_df = filtered_derivatives.nlargest(100, 'download_count_num')[display_cols].reset_index(drop=True)
+
+                        # 显示前100个模型
+                        st.dataframe(display_df, use_container_width=True, height=500)
+
+                        # 导出功能
+                        st.markdown("### 📥 导出报告")
+
+                        if st.button("生成Excel报告", type="secondary"):
+                            from openpyxl import Workbook
+                            output = BytesIO()
+
+                            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                                # Sheet 1: 总体概览
+                                overview_data = {
+                                    '指标': ['总模型数', '衍生模型数', '官方模型数', '衍生率'],
+                                    '数值': [
+                                        analysis_result['total_models'],
+                                        analysis_result['total_derivative_models'],
+                                        analysis_result['total_official_models'],
+                                        f"{analysis_result['derivative_rate']:.1f}%"
+                                    ]
+                                }
+                                pd.DataFrame(overview_data).to_excel(writer, sheet_name='总体概览', index=False)
+
+                                # Sheet 2: 平台统计
+                                platform_df.to_excel(writer, sheet_name='平台统计', index=False)
+
+                                # Sheet 3: 系列统计
+                                if analysis_result['by_series']:
+                                    series_df.to_excel(writer, sheet_name='系列统计', index=False)
+
+                                # Sheet 4: 衍生模型列表
+                                export_df = derivative_models_df[display_cols].copy()
+                                export_df.to_excel(writer, sheet_name='衍生模型列表', index=False)
+
+                            excel_data = output.getvalue()
+
+                            st.download_button(
+                                label="📥 下载完整报告",
+                                data=excel_data,
+                                file_name=f"衍生模型生态分析_{selected_date}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True
+                            )
+                    else:
+                        st.info("该日期没有衍生模型数据")

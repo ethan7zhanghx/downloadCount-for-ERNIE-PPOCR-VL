@@ -101,26 +101,47 @@ The system uses a two-tier fetcher architecture:
    - `fetchers_fixed_links.py`: Fixed URL list platforms (GitCode, CAICT)
    - `selenium.py`: Selenium-based scraping for platforms without APIs
 
+**Analysis Module (`analysis.py`)**
+- `calculate_weekly_report()`: Generates weekly comparison reports for ERNIE-4.5 or PaddleOCR-VL
+- `mark_official_models()`: Identifies official models by publisher (百度, baidu, Paddle, etc.)
+- `analyze_derivative_models_all_platforms()`: Cross-platform derivative model analysis
+- Uses backfill logic (`last_value_per_model=True`) for counting models across time
+- Enforces deduplication and standardization (publisher name normalization, model name cleanup)
+
 **Model Analysis (`model_analysis.py`)**
 - `OFFICIAL_MODEL_GROUPS`: Defines official ERNIE model families and their variants
 - `normalize_base_models()`: Standardizes base_model references and fixes misclassifications
-- Used for derivative ecosystem statistics
+- `analyze_derivative_ecosystem()`: HuggingFace-specific derivative analysis with base_model grouping
 
 ### Main Application (`app.py`)
 
-Streamlit-based web interface with:
+Streamlit-based web interface with multiple analysis pages:
+
+**Pages:**
+1. **📥 数据更新**: Fetch data from all platforms (supports parallel/sequential execution)
+2. **📊 ERNIE-4.5 分析**: Weekly report comparing two dates for ERNIE-4.5 models
+3. **📊 PaddleOCR-VL 分析**: Weekly report for PaddleOCR-VL models
+4. **🌳 衍生模型生态**: Cross-platform derivative model ecosystem analysis
+5. **🌲 Model Tree 统计**: HuggingFace model tree exploration
+6. **🗄️ 数据库管理**: Database backup, restore, and data entry
+
+**Key Functions:**
 - `fetch_platform_data_only()`: Core fetching logic with progress tracking
 - Parallel fetching support using `concurrent.futures`
 - Progress callbacks for UI updates
-- Automatic database saving
+- Automatic database saving with deduplication at query time
 
 ### Scripts Directory (`scripts/`)
 
 Utility scripts for data management and fixes:
+- `backfill_model_category.py`: Populate `model_category` field using `search_keyword` and name matching
 - `fetch_*_model_tree.py`: Fetch model trees for specific model families
 - `reclassify_*.py`: Fix model classifications
 - `fix_*.py`: Various data repair scripts
 - `run_gitcode_fetcher.py`: Standalone GitCode fetcher
+- `export_db.py`: Export database to Excel
+- `import_excel.py`: Import data from Excel
+- `cleanup_db.py`: Database cleanup operations
 - `paddle_attribution/`: PaddlePaddle usage attribution analysis
 
 ## Database Schema
@@ -128,7 +149,7 @@ Utility scripts for data management and fixes:
 **Table: `model_downloads`**
 - Core fields: `date`, `repo`, `model_name`, `publisher`, `download_count`
 - Classification: `model_type`, `model_category`, `tags`, `base_model`
-- Metadata: `data_source`, `likes`, `library_name`, `pipeline_tag`
+- Metadata: `data_source`, `likes`, `library_name`, `pipeline_tag`, `search_keyword`
 - Timestamps: `created_at`, `last_modified`, `fetched_at`
 - API data: `base_model_from_api`
 
@@ -138,17 +159,31 @@ Utility scripts for data management and fixes:
 
 **Data Strategy**: Raw data is saved without deduplication. Deduplication and max value selection happens at query time in `load_data_from_db()`.
 
+**Critical: `model_category` Field**
+- All records must have `model_category` filled (ernie-4.5, paddleocr-vl, other-ernie, or other)
+- If adding new data without this field, run `python3 scripts/backfill_model_category.py` to populate it
+- The backfill script uses `search_keyword` (if available) and model name matching
+- This field is essential for cross-platform analysis
+
 ## Key Implementation Details
 
 ### Model Classification
 
-Models are classified into two main categories (avoiding 'other'):
+**Model Categories** (stored in `model_category` field):
 - `ernie-4.5`: ERNIE 4.5 models and related derivatives
 - `paddleocr-vl`: PaddleOCR-VL models
+- `other-ernie`: Other ERNIE family models
+- `other`: Non-ERNIE models
 
-Model types are detected using structured HuggingFace tags:
+**Classification Logic:**
+1. **Priority**: Use `search_keyword` field if available (records which search term found the model)
+2. **Fallback**: Model name matching (case-insensitive, supports Chinese characters like "文心")
+3. All platforms now have `model_category` populated via backfill script
+
+**Model Types** (HuggingFace only, detected using structured tags):
 - Priority: HF tags > model card data > name-based heuristics
 - Tag patterns: `base_model:quantized:*`, `base_model:finetune:*`, etc.
+- Types: `original`, `quantized`, `finetune`, `adapter`, `lora`, `merge`, `other`
 
 ### Progress Tracking
 
@@ -168,27 +203,41 @@ When `use_model_tree=True`:
 - Recursively discovers all derivatives using HuggingFace's base_model tags
 - More comprehensive than keyword search alone
 - Automatically classifies derivative types
+- Sets `data_source` field to indicate discovery method (`search`, `model_tree`, `both`)
+
+### Official vs Derivative Model Detection
+
+**Official Models** are identified by publisher containing (case-insensitive):
+- '百度', 'baidu', 'Paddle', 'yiyan', '一言'
+
+**Derivative Models** are all non-official models (used in cross-platform ecosystem analysis)
+
+The `mark_official_models()` function adds an `is_official` column to DataFrames for filtering.
 
 ## Development Notes
 
 ### When Adding New Platforms
 
 1. Create fetcher function in appropriate `fetchers/fetchers_*.py` file
-2. Add to `UNIFIED_PLATFORM_FETCHERS` in `fetchers_unified.py`
-3. Add platform name to `PLATFORM_NAMES` in `config.py`
-4. Follow `BaseFetcher` interface: return `(DataFrame, total_count)`
+2. Ensure fetcher records `search_keyword` parameter in `create_record()` calls
+3. Add to `UNIFIED_PLATFORM_FETCHERS` in `fetchers_unified.py`
+4. Add platform name to `PLATFORM_NAMES` in `config.py`
+5. Follow `BaseFetcher` interface: return `(DataFrame, total_count)`
+6. Add official publisher pattern to `OFFICIAL_RULES` in `analysis.py` if needed
 
 ### When Adding Database Fields
 
 1. Add column to schema in `db.py::init_database()`
 2. Add migration logic in the column check section (lines 36-62)
 3. Update DataFrame creation in relevant fetchers
+4. If the field should be populated for existing data, create a backfill script in `scripts/` (see `backfill_model_category.py` as example)
 
 ### When Fixing Data Issues
 
 1. Always backup first using `db_manager.backup_database()`
 2. Write scripts in `scripts/` directory for reproducibility
 3. Update classification logic in `model_analysis.py` or `fetchers_modeltree.py` if needed
+4. After schema changes or data cleanup, clear Python cache: `find . -name "__pycache__" -type d -exec rm -rf {} +`
 
 ### Debugging Fetchers
 

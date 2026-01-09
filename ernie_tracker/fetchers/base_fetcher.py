@@ -29,7 +29,7 @@ class BaseFetcher(ABC):
         """
         pass
 
-    def create_record(self, model_name, publisher, download_count):
+    def create_record(self, model_name, publisher, download_count, search_keyword=None):
         """
         创建一条记录
 
@@ -37,17 +37,21 @@ class BaseFetcher(ABC):
             model_name: 模型名称
             publisher: 发布者
             download_count: 下载量
+            search_keyword: 搜索关键词（可选）
 
         Returns:
             dict: 记录字典
         """
-        return {
+        record = {
             "date": self.today,
             "repo": self.platform_name,
             "model_name": model_name,
             "publisher": publisher,
             "download_count": download_count
         }
+        if search_keyword:
+            record["search_keyword"] = search_keyword
+        return record
 
     def to_dataframe(self):
         """将结果转换为 DataFrame"""

@@ -113,7 +113,8 @@ def fetch_hugging_face_data_unified(progress_callback=None, progress_total=None,
                                 "model_category": None,
                                 "tags": None,
                                 "base_model": None,
-                                "data_source": 'search'  # 标记为传统搜索模式
+                                "data_source": 'search',  # 标记为传统搜索模式
+                                "search_keyword": search_term  # 记录搜索关键词
                             }
                             search_results.append(model_data)
 
@@ -162,10 +163,14 @@ def fetch_hugging_face_data_unified(progress_callback=None, progress_total=None,
 from modelscope.hub.api import HubApi
 
 def get_modelscope_ids_unified():
-    """获取ModelScope上的所有ERNIE-4.5和PaddleOCR-VL模型ID"""
+    """获取ModelScope上的所有ERNIE-4.5和PaddleOCR-VL模型ID
+
+    Returns:
+        dict: {model_id: search_keyword} 记录每个模型通过哪个关键词搜索到的
+    """
     driver = create_chrome_driver(headless=False)
     wait = WebDriverWait(driver, 20)
-    model_ids = []
+    model_id_to_keyword = {}  # 记录每个模型ID对应的搜索关键词
 
     # 搜索 ERNIE-4.5 和 PaddleOCR-VL
     search_terms = ["ERNIE-4.5", "PaddleOCR-VL"]
@@ -193,23 +198,25 @@ def get_modelscope_ids_unified():
                 href = link.get_attribute("href")
                 if "/models/" in href:
                     model_id = href.split("/models/")[-1]
-                    model_ids.append(model_id)
+                    # 如果模型ID已存在，保持第一个搜索词（ERNIE-4.5优先）
+                    if model_id not in model_id_to_keyword:
+                        model_id_to_keyword[model_id] = search_term
 
             page += 1
 
     driver.quit()
-    return list(set(model_ids))
+    return model_id_to_keyword
 
 def fetch_modelscope_data_unified(progress_callback=None, progress_total=None):
     """统一获取ModelScope上的PaddlePaddle模型"""
     today = date.today().isoformat()
-    model_ids = list(get_modelscope_ids_unified())
-    total_count = len(model_ids)
+    model_id_to_keyword = get_modelscope_ids_unified()  # 返回字典
+    total_count = len(model_id_to_keyword)
 
     api = HubApi()
     records = []
 
-    for i, model_id in enumerate(model_ids, start=1):
+    for i, (model_id, search_keyword) in enumerate(model_id_to_keyword.items(), start=1):
         try:
             info = api.get_model(model_id, revision="master")
             downloads = info.get("Downloads", 0)
@@ -218,7 +225,8 @@ def fetch_modelscope_data_unified(progress_callback=None, progress_total=None):
                 "repo": "ModelScope",
                 "model_name": model_id.split("/", 1)[1] if "/" in model_id else model_id,
                 "publisher": model_id.split("/")[0],
-                "download_count": downloads
+                "download_count": downloads,
+                "search_keyword": search_keyword
             })
         except Exception as e:
             print(f"获取 {model_id} 失败: {e}")
@@ -228,7 +236,7 @@ def fetch_modelscope_data_unified(progress_callback=None, progress_total=None):
 
     df = pd.DataFrame(
         records,
-        columns=["date", "repo", "model_name", "publisher", "download_count"]
+        columns=["date", "repo", "model_name", "publisher", "download_count", "search_keyword"]
     )
     df['download_count'] = pd.to_numeric(df['download_count'], errors='coerce').fillna(0).astype(int)
     return df, total_count

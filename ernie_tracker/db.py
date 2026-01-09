@@ -28,7 +28,8 @@ def init_database():
             created_at TEXT,
             last_modified TEXT,
             fetched_at TEXT,
-            base_model_from_api TEXT
+            base_model_from_api TEXT,
+            search_keyword TEXT
         )
     """)
 
@@ -56,6 +57,7 @@ def init_database():
             'last_modified',
             'fetched_at',
             'base_model_from_api',
+            'search_keyword',
         ]:
             if missing not in columns:
                 conn.execute(f"ALTER TABLE {DATA_TABLE} ADD COLUMN {missing} TEXT")

@@ -142,7 +142,8 @@ class AIStudioFetcher(BaseFetcher):
                                     self.results.append(self.create_record(
                                         model_name=model_name,
                                         publisher=publisher,
-                                        download_count=final_usage_count
+                                        download_count=final_usage_count,
+                                        search_keyword=search_term
                                     ))
 
                                     processed_count += 1
@@ -249,7 +250,8 @@ class GiteeFetcher(BaseFetcher):
                             self.results.append(self.create_record(
                                 model_name=model_name,
                                 publisher=publisher,
-                                download_count=download_count
+                                download_count=download_count,
+                                search_keyword=search_term
                             ))
 
                             total_count += 1
@@ -324,7 +326,8 @@ class ModelersFetcher(BaseFetcher):
                             self.results.append(self.create_record(
                                 model_name=model_name,
                                 publisher=publisher,
-                                download_count=download_count
+                                download_count=download_count,
+                                search_keyword=search_term
                             ))
 
                             total_models += 1
