@@ -105,6 +105,17 @@ class AIStudioFetcher(BaseFetcher):
                                     continue
 
                                 card = cards[i]
+
+                                # 🔧 新增：获取模型详情页URL
+                                model_url = None
+                                try:
+                                    # 尝试找到卡片内的链接元素
+                                    link_element = card.find_element(By.CSS_SELECTOR, "a")
+                                    model_url = link_element.get_attribute("href")
+                                except Exception as e:
+                                    print(f"  获取URL失败: {e}")
+                                    model_url = None
+
                                 full_model_name = card.find_element(
                                     By.CSS_SELECTOR, "div.ai-model-list-wapper-card-right-desc"
                                 ).text.strip()
@@ -161,7 +172,8 @@ class AIStudioFetcher(BaseFetcher):
                                         publisher=publisher,
                                         download_count=final_usage_count,
                                         search_keyword=search_term,
-                                        last_modified=last_modified  # 新增：这是更新时间
+                                        last_modified=last_modified,  # 更新时间
+                                        url=model_url  # 新增：模型详情页URL
                                     ))
 
                                     processed_count += 1

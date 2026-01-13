@@ -30,7 +30,7 @@ class BaseFetcher(ABC):
         pass
 
     def create_record(self, model_name, publisher, download_count, search_keyword=None,
-                     created_at=None, last_modified=None):
+                     created_at=None, last_modified=None, url=None):
         """
         创建一条记录
 
@@ -41,6 +41,7 @@ class BaseFetcher(ABC):
             search_keyword: 搜索关键词（可选）
             created_at: 创建时间（可选）
             last_modified: 最后修改时间（可选）
+            url: 模型详情页URL（可选）
 
         Returns:
             dict: 记录字典
@@ -58,6 +59,8 @@ class BaseFetcher(ABC):
             record["created_at"] = created_at
         if last_modified:
             record["last_modified"] = last_modified
+        if url:
+            record["url"] = url
         return record
 
     def to_dataframe(self):
@@ -72,7 +75,7 @@ class BaseFetcher(ABC):
 
         # 确保基础列在前
         base_columns = ["date", "repo", "model_name", "publisher", "download_count"]
-        optional_columns = ["search_keyword", "created_at", "last_modified"]
+        optional_columns = ["search_keyword", "created_at", "last_modified", "url"]
         ordered_columns = base_columns + [col for col in optional_columns if col in all_columns]
 
         # 添加其他可能出现的列

@@ -58,6 +58,7 @@ def init_database():
             'fetched_at',
             'base_model_from_api',
             'search_keyword',
+            'url',  # 新增：模型详情页URL
         ]:
             if missing not in columns:
                 conn.execute(f"ALTER TABLE {DATA_TABLE} ADD COLUMN {missing} TEXT")
