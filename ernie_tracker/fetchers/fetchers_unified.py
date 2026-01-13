@@ -220,13 +220,33 @@ def fetch_modelscope_data_unified(progress_callback=None, progress_total=None):
         try:
             info = api.get_model(model_id, revision="master")
             downloads = info.get("Downloads", 0)
+
+            # 🔧 新增：获取时间字段
+            from datetime import datetime
+            created_at = None
+            last_modified = None
+
+            if "CreatedTime" in info and info["CreatedTime"]:
+                try:
+                    created_at = datetime.fromtimestamp(info["CreatedTime"]).strftime('%Y-%m-%d')
+                except:
+                    created_at = None
+
+            if "LastUpdatedTime" in info and info["LastUpdatedTime"]:
+                try:
+                    last_modified = datetime.fromtimestamp(info["LastUpdatedTime"]).strftime('%Y-%m-%d')
+                except:
+                    last_modified = None
+
             records.append({
                 "date": today,
                 "repo": "ModelScope",
                 "model_name": model_id.split("/", 1)[1] if "/" in model_id else model_id,
                 "publisher": model_id.split("/")[0],
                 "download_count": downloads,
-                "search_keyword": search_keyword
+                "search_keyword": search_keyword,
+                "created_at": created_at,
+                "last_modified": last_modified
             })
         except Exception as e:
             print(f"获取 {model_id} 失败: {e}")
@@ -236,7 +256,7 @@ def fetch_modelscope_data_unified(progress_callback=None, progress_total=None):
 
     df = pd.DataFrame(
         records,
-        columns=["date", "repo", "model_name", "publisher", "download_count", "search_keyword"]
+        columns=["date", "repo", "model_name", "publisher", "download_count", "search_keyword", "created_at", "last_modified"]
     )
     df['download_count'] = pd.to_numeric(df['download_count'], errors='coerce').fillna(0).astype(int)
     return df, total_count
