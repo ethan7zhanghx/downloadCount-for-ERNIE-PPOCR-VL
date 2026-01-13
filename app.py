@@ -2133,22 +2133,32 @@ elif page == "🌳 衍生模型生态":
                             fig_platform = px.bar(
                                 platform_df,
                                 x='平台',
-                                y='衍生模型',
+                                y='衍生模型总数',
                                 title="各平台衍生模型数量",
-                                text='衍生模型'
+                                text='衍生模型总数'
                             )
                             fig_platform.update_traces(texttemplate='%{text}', textposition='outside')
                             fig_platform.update_layout(showlegend=False)
                             st.plotly_chart(fig_platform, use_container_width=True)
 
                         with col_chart2:
+                            # 重新计算衍生率数据
+                            rate_data = []
+                            for platform, stats in analysis_result['by_platform'].items():
+                                rate_data.append({
+                                    '平台': platform,
+                                    '衍生率': stats['derivative_rate']
+                                })
+
+                            rate_df = pd.DataFrame(rate_data)
+
                             fig_rate = px.bar(
-                                platform_df,
+                                rate_df,
                                 x='平台',
-                                y=platform_df['衍生率'].str.rstrip('%').astype(float),
+                                y='衍生率',
                                 title="各平台衍生率",
                                 labels={'y': '衍生率 (%)'},
-                                text=platform_df['衍生率']
+                                text=rate_df['衍生率'].apply(lambda x: f'{x:.1f}%')
                             )
                             fig_rate.update_traces(texttemplate='%{text}', textposition='outside')
                             fig_rate.update_layout(showlegend=False)
