@@ -296,7 +296,6 @@ page = st.sidebar.radio(
         "📊 ERNIE-4.5 分析",
         "📊 PaddleOCR-VL 分析",
         "🌳 衍生模型生态",
-        "🌲 Model Tree 统计",
         "🗄️ 数据库管理",
     ],
     index=0,
@@ -1007,97 +1006,6 @@ elif page == "📊 PaddleOCR-VL 分析":
             file_name=f"PaddleOCR-VL_周报_{previous_date}_to_{current_date}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
-# ================= Model Tree 统计 =================
-elif page == "🌲 Model Tree 统计":
-    st.markdown("## 🌲 Model Tree 统计")
-    from ernie_tracker.analysis import get_available_dates
-
-    available_dates = get_available_dates()
-    if not available_dates:
-        st.warning("⚠️ 数据库中暂无数据，请先更新或导入数据。")
-    else:
-        date_options = ["全部"] + available_dates
-        selected_date = st.selectbox("📅 选择日期", options=date_options, index=1 if len(date_options) > 1 else 0)
-        date_filter = None if selected_date == "全部" else selected_date
-
-        df = load_data_from_db(date_filter=date_filter)
-
-        if df.empty:
-            st.warning(f"⚠️ {selected_date} 没有数据")
-            st.stop()
-
-        # 清洗 base_model 中的空值字符串
-        if 'base_model' in df.columns:
-            df['base_model'] = df['base_model'].apply(
-                lambda v: None if str(v).strip().lower() in ['', 'none', 'nan'] else v
-            )
-
-        # 仅保留 ERNIE 相关，排除 PaddleOCR-VL
-        df = df[df['model_category'] != 'paddleocr-vl']
-
-        total = len(df)
-        original_count = len(df[df['model_type'] == 'original']) if 'model_type' in df.columns else 0
-        derivative_count = total - original_count
-
-        col_total1, col_total2, col_total3 = st.columns(3)
-        with col_total1:
-            st.metric("总模型数", total)
-
-        st.markdown("### 📊 数据来源分布")
-        source_counts = df['data_source'].fillna('unknown').value_counts().reset_index()
-        source_counts.columns = ['data_source', 'count']
-        st.dataframe(source_counts, use_container_width=True)
-
-        st.markdown("### 🧭 分类统计")
-        col_stats1, col_stats2 = st.columns(2)
-        with col_stats1:
-            cat_counts = df['model_category'].fillna('unknown').value_counts().reset_index()
-            cat_counts.columns = ['model_category', 'count']
-            st.dataframe(cat_counts, use_container_width=True)
-        with col_stats2:
-            type_counts = df['model_type'].fillna('unknown').value_counts().reset_index()
-            type_counts.columns = ['model_type', 'count']
-            st.dataframe(type_counts, use_container_width=True)
-
-        class_total = cat_counts['count'].sum() if not cat_counts.empty else 0
-        with col_total2:
-            st.metric("分类合计", class_total)
-        with col_total3:
-            st.metric("衍生模型数", derivative_count)
-        if class_total != total:
-            st.warning(f"分类计数({class_total})与总模型数({total})不一致，请刷新或检查数据。")
-
-        derivative_df = df[df['base_model'].notna() & (df['base_model'] != '') & (df['model_type'] != 'original')]
-
-        if not derivative_df.empty:
-            st.markdown("### 🌳 按基座汇总")
-            base_summary = (
-                derivative_df.groupby('base_model')
-                .agg(
-                    derivative_count=('model_name', 'count'),
-                    downloads=('download_count', lambda x: pd.to_numeric(x, errors='coerce').fillna(0).sum()),
-                )
-                .reset_index()
-                .sort_values('derivative_count', ascending=False)
-            )
-            st.dataframe(base_summary, use_container_width=True)
-
-            st.markdown("### 🏆 下载量 Top 衍生模型")
-            top_derivatives = derivative_df.copy()
-            top_derivatives['download_count'] = pd.to_numeric(top_derivatives['download_count'], errors='coerce').fillna(0)
-            top_derivatives = top_derivatives.sort_values('download_count', ascending=False).head(30)
-            display_cols = [
-                'model_name',
-                'publisher',
-                'base_model',
-                'download_count',
-                'model_type',
-                'model_category',
-                'data_source',
-            ]
-            top_derivatives = top_derivatives[[c for c in display_cols if c in top_derivatives.columns]]
-            st.dataframe(top_derivatives, use_container_width=True)
 
 # ================= 数据库管理模块 =================
 elif page == "🗄️ 数据库管理":
@@ -2111,7 +2019,18 @@ elif page == "🌳 衍生模型生态":
                                         weekly_new_df['download_count'], errors='coerce'
                                     ).fillna(0).astype(int)
                                     weekly_new_df = weekly_new_df.sort_values('download_count', ascending=False)
-                                    st.dataframe(weekly_new_df, use_container_width=True, height=300)
+
+                                    # 选择要显示的列
+                                    weekly_display_cols = ['model_name', 'publisher', 'repo', 'download_count']
+                                    if 'model_category' in weekly_new_df.columns:
+                                        weekly_display_cols.append('model_category')
+                                    if 'model_type' in weekly_new_df.columns:
+                                        weekly_display_cols.append('model_type')
+
+                                    # 确保所有列都存在
+                                    weekly_display_cols = [col for col in weekly_display_cols if col in weekly_new_df.columns]
+
+                                    st.dataframe(weekly_new_df[weekly_display_cols], use_container_width=True, height=300)
                             else:
                                 st.info("✅ 本周暂无新增衍生模型")
 
@@ -2290,6 +2209,8 @@ elif page == "🌳 衍生模型生态":
                         display_cols = ['model_name', 'publisher', 'repo', 'download_count']
                         if 'model_category' in filtered_derivatives.columns:
                             display_cols.append('model_category')
+                        if 'model_type' in filtered_derivatives.columns:
+                            display_cols.append('model_type')
 
                         # 确保所有列都存在
                         display_cols = [col for col in display_cols if col in filtered_derivatives.columns]
@@ -2299,10 +2220,10 @@ elif page == "🌳 衍生模型生态":
                             filtered_derivatives['download_count'], errors='coerce'
                         ).fillna(0)
 
-                        # 按下载量降序排序
-                        display_df = filtered_derivatives.nlargest(100, 'download_count_num')[display_cols].reset_index(drop=True)
+                        # 按下载量降序排序，显示所有模型
+                        display_df = filtered_derivatives.sort_values('download_count_num', ascending=False)[display_cols].reset_index(drop=True)
 
-                        # 显示前100个模型
+                        # 显示所有模型
                         st.dataframe(display_df, use_container_width=True, height=500)
 
                         # 导出功能
