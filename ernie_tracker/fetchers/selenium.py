@@ -119,16 +119,16 @@ class AIStudioFetcher(BaseFetcher):
                                     By.CSS_SELECTOR, "span.ai-model-list-wapper-card-right-detail-one-like"
                                 ).text.strip()
 
-                                # 🔧 新增：获取创建时间（第3个tip）
-                                created_at = None
+                                # 🔧 新增：获取更新时间（第3个tip）
+                                last_modified = None
                                 if len(detail_items) >= 3:
                                     try:
-                                        created_at = detail_items[2].find_element(
+                                        last_modified = detail_items[2].find_element(
                                             By.CSS_SELECTOR, "span.ai-model-list-wapper-card-right-detail-one-like"
                                         ).text.strip()
                                     except Exception as e:
-                                        print(f"获取创建时间失败: {e}")
-                                        created_at = None
+                                        print(f"获取更新时间失败: {e}")
+                                        last_modified = None
 
                                 publisher = card.find_element(
                                     By.CSS_SELECTOR, "span.ai-model-list-wapper-card-right-detail-one-publisher"
@@ -161,7 +161,7 @@ class AIStudioFetcher(BaseFetcher):
                                         publisher=publisher,
                                         download_count=final_usage_count,
                                         search_keyword=search_term,
-                                        created_at=created_at  # 新增
+                                        last_modified=last_modified  # 新增：这是更新时间
                                     ))
 
                                     processed_count += 1

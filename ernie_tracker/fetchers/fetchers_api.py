@@ -101,17 +101,24 @@ class ModelScopeFetcher(BaseFetcher):
                 created_at = None
                 last_modified = None
 
-                if info.get("CreatedTime"):
+                # 修改：使用 "in" 检查字段是否存在，而不是判断值是否为真
+                if "CreatedTime" in info and info["CreatedTime"]:
                     try:
                         created_at = datetime.fromtimestamp(info["CreatedTime"]).strftime('%Y-%m-%d')
-                    except:
+                    except Exception as e:
+                        print(f"  解析CreatedTime失败 ({model_id}): {e}")
                         created_at = None
 
-                if info.get("LastUpdatedTime"):
+                if "LastUpdatedTime" in info and info["LastUpdatedTime"]:
                     try:
                         last_modified = datetime.fromtimestamp(info["LastUpdatedTime"]).strftime('%Y-%m-%d')
-                    except:
+                    except Exception as e:
+                        print(f"  解析LastUpdatedTime失败 ({model_id}): {e}")
                         last_modified = None
+
+                # 调试输出
+                if i <= 3:  # 只打印前3个模型
+                    print(f"[ModelScope] {model_id}: created_at={created_at}, last_modified={last_modified}")
 
                 self.results.append(self.create_record(
                     model_name=model_id,
