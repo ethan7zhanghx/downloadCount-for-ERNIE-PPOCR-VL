@@ -95,10 +95,30 @@ class ModelScopeFetcher(BaseFetcher):
             try:
                 info = api.get_model(model_id, revision="master")
                 downloads = info.get("Downloads", 0)
+
+                # 🔧 新增：获取时间字段
+                from datetime import datetime
+                created_at = None
+                last_modified = None
+
+                if info.get("CreatedTime"):
+                    try:
+                        created_at = datetime.fromtimestamp(info["CreatedTime"]).strftime('%Y-%m-%d')
+                    except:
+                        created_at = None
+
+                if info.get("LastUpdatedTime"):
+                    try:
+                        last_modified = datetime.fromtimestamp(info["LastUpdatedTime"]).strftime('%Y-%m-%d')
+                    except:
+                        last_modified = None
+
                 self.results.append(self.create_record(
                     model_name=model_id,
                     publisher=model_id.split("/")[0],
-                    download_count=downloads
+                    download_count=downloads,
+                    created_at=created_at,
+                    last_modified=last_modified
                 ))
             except Exception as e:
                 print(f"获取 {model_id} 失败: {e}")

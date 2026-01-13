@@ -109,9 +109,26 @@ class AIStudioFetcher(BaseFetcher):
                                     By.CSS_SELECTOR, "div.ai-model-list-wapper-card-right-desc"
                                 ).text.strip()
 
-                                usage_count = card.find_element(
+                                # 🔧 修改：获取所有detail元素，提取下载量和时间
+                                detail_items = card.find_elements(
+                                    By.CSS_SELECTOR, "div.ai-model-list-wapper-card-right-detail-one-item-tip"
+                                )
+
+                                # 获取下载量（第1个tip）
+                                usage_count = detail_items[0].find_element(
                                     By.CSS_SELECTOR, "span.ai-model-list-wapper-card-right-detail-one-like"
                                 ).text.strip()
+
+                                # 🔧 新增：获取创建时间（第3个tip）
+                                created_at = None
+                                if len(detail_items) >= 3:
+                                    try:
+                                        created_at = detail_items[2].find_element(
+                                            By.CSS_SELECTOR, "span.ai-model-list-wapper-card-right-detail-one-like"
+                                        ).text.strip()
+                                    except Exception as e:
+                                        print(f"获取创建时间失败: {e}")
+                                        created_at = None
 
                                 publisher = card.find_element(
                                     By.CSS_SELECTOR, "span.ai-model-list-wapper-card-right-detail-one-publisher"
@@ -143,7 +160,8 @@ class AIStudioFetcher(BaseFetcher):
                                         model_name=model_name,
                                         publisher=publisher,
                                         download_count=final_usage_count,
-                                        search_keyword=search_term
+                                        search_keyword=search_term,
+                                        created_at=created_at  # 新增
                                     ))
 
                                     processed_count += 1
