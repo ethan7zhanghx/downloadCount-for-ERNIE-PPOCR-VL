@@ -2088,18 +2088,40 @@ elif page == "🌳 衍生模型生态":
                     if analysis_result['by_platform']:
                         # 创建平台统计表格
                         platform_data = []
+
+                        # 判断是否选择了多个系列
+                        is_multi_series = len(selected_series) > 1
+
                         for platform, stats in analysis_result['by_platform'].items():
-                            platform_data.append({
+                            row_data = {
                                 '平台': platform,
-                                '总模型数': stats['total_models'],
-                                '官方模型': stats['official_models'],
-                                '衍生模型': stats['derivative_models'],
-                                '衍生率': f"{stats['derivative_rate']:.1f}%",
+                                '衍生模型总数': stats['derivative_models'],
                                 '衍生模型总下载量': f"{stats['total_downloads']:,}"
-                            })
+                            }
+
+                            # 如果选择了多个系列，添加分系列统计
+                            if is_multi_series and 'by_series' in stats and stats['by_series']:
+                                series_mapping = {
+                                    "ernie-4.5": "ERNIE-4.5",
+                                    "paddleocr-vl": "PaddleOCR-VL",
+                                    "other-ernie": "其他ERNIE"
+                                }
+
+                                for category, category_stats in stats['by_series'].items():
+                                    display_name = series_mapping.get(category, category)
+                                    row_data[f'{display_name}衍生模型数'] = category_stats['count']
+                                    row_data[f'{display_name}衍生模型下载量'] = f"{category_stats['downloads']:,}"
+
+                            platform_data.append(row_data)
 
                         platform_df = pd.DataFrame(platform_data)
-                        platform_df = platform_df.sort_values('衍生模型', ascending=False)
+
+                        # 排序列：优先按衍生模型总数排序
+                        if is_multi_series:
+                            platform_df = platform_df.sort_values('衍生模型总数', ascending=False)
+                        else:
+                            # 单系列时保持原有排序逻辑
+                            platform_df = platform_df.sort_values('衍生模型总数', ascending=False)
 
                         # 展示表格
                         st.dataframe(platform_df, use_container_width=True, height=300)

@@ -1272,13 +1272,33 @@ def analyze_derivative_models_all_platforms(df, selected_series=None):
             ['model_name', 'publisher', 'download_count']
         ].to_dict('records')
 
+        # 🔧 新增：按系列统计（如果选择了多个系列）
+        by_series_stats = {}
+        if selected_series and 'model_category' in platform_derivative_df.columns:
+            series_mapping = {
+                "ERNIE-4.5": "ernie-4.5",
+                "PaddleOCR-VL": "paddleocr-vl",
+                "其他ERNIE": "other-ernie"
+            }
+
+            for series in selected_series:
+                category = series_mapping.get(series, series)
+                series_df = platform_derivative_df[platform_derivative_df['model_category'] == category]
+                series_downloads = int(series_df['download_count_num'].sum())
+
+                by_series_stats[category] = {
+                    'count': len(series_df),
+                    'downloads': series_downloads
+                }
+
         by_platform[platform] = {
             'total_models': len(platform_df),
             'derivative_models': len(platform_derivative_df),
             'official_models': len(platform_df[platform_df['is_official'] == True]),
             'total_downloads': total_downloads,
             'derivative_rate': (len(platform_derivative_df) / len(platform_df) * 100) if len(platform_df) > 0 else 0,
-            'top_models': top_models
+            'top_models': top_models,
+            'by_series': by_series_stats  # 新增：按系列统计
         }
 
     # 按系列统计（如果有 model_category 字段）
