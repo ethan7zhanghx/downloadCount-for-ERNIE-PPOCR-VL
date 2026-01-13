@@ -106,15 +106,40 @@ class AIStudioFetcher(BaseFetcher):
 
                                 card = cards[i]
 
-                                # 🔧 新增：获取模型详情页URL
+                                # 🔧 新增：点击卡片进入详情页获取URL
                                 model_url = None
                                 try:
-                                    # 尝试找到卡片内的链接元素
-                                    link_element = card.find_element(By.CSS_SELECTOR, "a")
-                                    model_url = link_element.get_attribute("href")
+                                    # 记录当前URL
+                                    current_url = driver.current_url
+
+                                    # 点击卡片
+                                    card.click()
+                                    time.sleep(2)  # 等待页面加载
+
+                                    # 获取详情页URL
+                                    model_url = driver.current_url
+
+                                    # 返回搜索页
+                                    driver.back()
+                                    time.sleep(1)  # 等待返回
+
+                                    # 重新获取cards引用（返回后可能失效）
+                                    cards = driver.find_elements(By.CSS_SELECTOR, "div.ai-model-list-wapper > div")
+
                                 except Exception as e:
                                     print(f"  获取URL失败: {e}")
-                                    model_url = None
+                                    # 尝试确保返回搜索页
+                                    try:
+                                        if "modelsoverview" not in driver.current_url:
+                                            driver.back()
+                                            time.sleep(1)
+                                    except:
+                                        pass
+                                    # 重新获取cards
+                                    try:
+                                        cards = driver.find_elements(By.CSS_SELECTOR, "div.ai-model-list-wapper > div")
+                                    except:
+                                        pass
 
                                 full_model_name = card.find_element(
                                     By.CSS_SELECTOR, "div.ai-model-list-wapper-card-right-desc"
