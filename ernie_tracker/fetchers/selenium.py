@@ -204,13 +204,16 @@ class AIStudioFetcher(BaseFetcher):
             detailed_count = extract_numbers(element.text)
             self._log_info(f"  [详情页 #{card_index}] ✅ 获取下载量: {detailed_count} (提取耗时: {(time.time() - extract_start)*1000:.2f}ms)")
 
-            # 核对列表页和详情页下载量
+            # 核对列表页和详情页下载量（不中断流程，只记录警告）
             if list_usage_count:
-                is_valid, reason = self._validate_download_count(list_usage_count, detailed_count)
-                if is_valid:
-                    self._log_info(f"  [详情页 #{card_index}] ✅ 下载量核对通过: 列表页={list_usage_count}, 详情页={detailed_count}")
-                else:
-                    self._log_warning(f"  [详情页 #{card_index}] ⚠️  下载量核对失败: {reason}")
+                try:
+                    is_valid, reason = self._validate_download_count(list_usage_count, detailed_count)
+                    if is_valid:
+                        self._log_info(f"  [详情页 #{card_index}] ✅ 下载量核对通过: 列表页={list_usage_count}, 详情页={detailed_count}")
+                    else:
+                        self._log_warning(f"  [详情页 #{card_index}] ⚠️  下载量核对失败: {reason}")
+                except Exception as e:
+                    self._log_warning(f"  [详情页 #{card_index}] ⚠️  下载量核对异常: {e}")
 
             # 返回搜索页
             self._log_debug(f"  [详情页 #{card_index}] 准备返回搜索页")
