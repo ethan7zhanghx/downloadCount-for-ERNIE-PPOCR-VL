@@ -116,10 +116,10 @@ def extract_numbers(text):
         text: 包含数字的文本
 
     Returns:
-        提取的第一个数字，如果没有则返回 None
+        提取的第一个数字（整数），如果没有则返回 None
     """
     numbers = re.findall(r'\d+', text.replace(',', ''))
-    return numbers[0] if numbers else None
+    return int(numbers[0]) if numbers else None
 
 
 def safe_extract_text(element, selector, by_type="css", default=""):
