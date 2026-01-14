@@ -279,7 +279,38 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
             time.sleep(0.5)
 
     total_elapsed_time = time.time() - total_start_time
-    overall_progress.success(f"🎯 并行抓取完成！总用时：{total_elapsed_time:.2f} 秒")
+
+    # AI Studio Model Tree 补充爬取（在第一轮完成后）
+    if "AI Studio" in platforms and st.session_state.get('use_model_tree', True):
+        overall_progress.info(f"🎯 平台爬取完成！总用时：{total_elapsed_time:.2f} 秒")
+        overall_progress.info("🌳 正在补充 AI Studio Model Tree（衍生模型）...")
+
+        try:
+            from ernie_tracker.fetchers.fetchers_modeltree import update_aistudio_model_tree
+
+            model_tree_df, model_tree_count = update_aistudio_model_tree(
+                save_to_db=save_to_database,
+                test_mode=False
+            )
+
+            # 计算总耗时（包括Model Tree）
+            final_elapsed_time = time.time() - total_start_time
+
+            if model_tree_count > 0:
+                all_dfs.append(model_tree_df)
+                overall_progress.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒（含Model Tree）")
+                overall_progress.success(f"✅ AI Studio Model Tree 完成：获取 {model_tree_count} 个衍生模型")
+            else:
+                overall_progress.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒（含Model Tree）")
+                overall_progress.info("ℹ️  AI Studio Model Tree：没有找到新的衍生模型")
+
+        except Exception as e:
+            final_elapsed_time = time.time() - total_start_time
+            overall_progress.warning(f"⚠️  AI Studio Model Tree 失败（不影响主流程）：{e}")
+            overall_progress.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒")
+    else:
+        # 没有AI Studio或未启用Model Tree
+        overall_progress.success(f"🎯 并行抓取完成！总用时：{total_elapsed_time:.2f} 秒")
 
     return all_dfs, total_elapsed_time
 
@@ -424,6 +455,37 @@ if page == "📥 数据更新":
                         st.success(f"✅ {platform} 完成，用时 {elapsed:.2f} 秒，{status_msg}")
 
                 total_elapsed_time = time.time() - total_start_time
+
+            # AI Studio Model Tree 补充爬取（在第一轮完成后）
+            if "AI Studio" in platforms and st.session_state.get('use_model_tree', True):
+                st.info(f"🎯 平台爬取完成！总用时：{total_elapsed_time:.2f} 秒")
+                st.info("🌳 正在补充 AI Studio Model Tree（衍生模型）...")
+
+                try:
+                    from ernie_tracker.fetchers.fetchers_modeltree import update_aistudio_model_tree
+
+                    model_tree_df, model_tree_count = update_aistudio_model_tree(
+                        save_to_db=save_to_database,
+                        test_mode=False
+                    )
+
+                    # 计算总耗时（包括Model Tree）
+                    final_elapsed_time = time.time() - total_start_time
+
+                    if model_tree_count > 0:
+                        all_dfs.append(model_tree_df)
+                        st.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒（含Model Tree）")
+                        st.success(f"✅ AI Studio Model Tree 完成：获取 {model_tree_count} 个衍生模型")
+                    else:
+                        st.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒（含Model Tree）")
+                        st.info("ℹ️  AI Studio Model Tree：没有找到新的衍生模型")
+
+                except Exception as e:
+                    final_elapsed_time = time.time() - total_start_time
+                    st.warning(f"⚠️  AI Studio Model Tree 失败（不影响主流程）：{e}")
+                    st.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒")
+            else:
+                # 没有AI Studio或未启用Model Tree
                 st.info(f"🎯 串行抓取完成！总用时：{total_elapsed_time:.2f} 秒")
 
             # 数据预览

@@ -494,7 +494,7 @@ UNIFIED_PLATFORM_FETCHERS = {
 }
 
 
-def fetch_all_paddlepaddle_data(platforms=None, progress_callback=None, progress_total=None):
+def fetch_all_paddlepaddle_data(platforms=None, progress_callback=None, progress_total=None, enable_model_tree=True):
     """
     一次性获取所有平台的PaddlePaddle模型数据（包含ERNIE-4.5和PaddleOCR-VL）
 
@@ -502,6 +502,7 @@ def fetch_all_paddlepaddle_data(platforms=None, progress_callback=None, progress
         platforms: 要抓取的平台列表，None表示所有平台
         progress_callback: 进度回调函数
         progress_total: 总数参考
+        enable_model_tree: 是否启用AI Studio Model Tree功能
 
     Returns:
         tuple: (DataFrame, 总数量)
@@ -511,6 +512,7 @@ def fetch_all_paddlepaddle_data(platforms=None, progress_callback=None, progress
 
     all_dfs = []
     total_count = 0
+    aistudio_included = "AI Studio" in platforms
 
     for platform in platforms:
         fetcher = UNIFIED_PLATFORM_FETCHERS.get(platform)
@@ -524,6 +526,10 @@ def fetch_all_paddlepaddle_data(platforms=None, progress_callback=None, progress
                 print(f"❌ {platform} 失败：{e}")
         else:
             print(f"⚠️ 找不到 {platform} 的抓取器")
+
+    # 注意：AI Studio Model Tree 已移至 app.py 中调用，避免重复执行
+    # 原因：app.py 中需要更精细的 UI 进度控制，且能避免两层调用导致的重复执行
+    # 参考：app.py 的并行和串行执行模式中的 Model Tree 调用
 
     if all_dfs:
         final_df = pd.concat(all_dfs, ignore_index=True)

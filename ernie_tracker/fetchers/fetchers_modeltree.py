@@ -1052,7 +1052,12 @@ def get_weekly_new_model_tree_derivatives(current_date: str, previous_date: str,
 
 if __name__ == "__main__":
     # 测试功能
-    print("=== 测试ERNIE模型树获取功能 ===")
+    print("=== 测试 Model Tree 功能 ===")
+    print("1. Hugging Face Model Tree")
+    print("2. AI Studio Model Tree")
+    print()
+
+    choice = input("请选择测试模式 (1/2/3=全部测试，默认=3): ").strip()
 
     # 测试分类功能
     test_cases = [
@@ -1068,11 +1073,439 @@ if __name__ == "__main__":
         category = classify_model(model_name, publisher)
         print(f"  {model_name} -> {category}")
 
-    # 测试获取模型树
-    print("\n🌳 测试获取模型树:")
-    df, count = get_all_ernie_derivatives(include_paddleocr=True)
-    print(f"总共获取到 {count} 个模型")
+    # 测试Hugging Face Model Tree
+    if choice in ['1', '3', '']:
+        print("\n🌳 测试 Hugging Face Model Tree:")
+        df, count = get_all_ernie_derivatives(include_paddleocr=True)
+        print(f"总共获取到 {count} 个模型")
 
-    if not df.empty:
-        print("\n前5个模型:")
-        print(df[['model_name', 'publisher', 'download_count', 'model_category']].head())
+        if not df.empty:
+            print("\n前5个模型:")
+            print(df[['model_name', 'publisher', 'download_count', 'model_category']].head())
+
+    # 测试AI Studio Model Tree
+    if choice in ['2', '3', '']:
+        print("\n🌳 测试 AI Studio Model Tree (测试模式):")
+        df, count = update_aistudio_model_tree(save_to_db=False, test_mode=True)
+        print(f"总共获取到 {count} 个衍生模型")
+
+        if not df.empty:
+            print("\n前5个衍生模型:")
+            print(df[['model_name', 'publisher', 'download_count', 'model_type', 'base_model']].head())
+
+
+# =============================================================================
+# AI Studio Model Tree 功能模块
+# =============================================================================
+
+def get_aistudio_official_models():
+    """
+    从数据库获取所有AI Studio官方模型
+
+    Returns:
+        DataFrame: 官方模型数据，包含 model_name, publisher, url 等字段
+    """
+    try:
+        from ..db import load_data_from_db
+        import sqlite3
+        import pandas as pd
+
+        conn = sqlite3.connect(DB_PATH)
+
+        # 获取AI Studio平台的数据
+        query = """
+            SELECT DISTINCT model_name, publisher, url
+            FROM model_downloads
+            WHERE repo = 'AI Studio'
+            AND (
+                publisher IN ('百度', 'baidu', 'Paddle', 'PaddlePaddle', 'yiyan', '一言')
+                OR publisher LIKE '%百度%'
+                OR publisher LIKE '%baidu%'
+                OR publisher LIKE '%Paddle%'
+            )
+            AND url IS NOT NULL
+            AND url != ''
+        """
+
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+
+        print(f"📊 找到 {len(df)} 个AI Studio官方模型")
+        return df
+
+    except Exception as e:
+        print(f"❌ 获取AI Studio官方模型失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def fetch_aistudio_model_tree(
+    progress_callback=None,
+    include_official_publishers=None,
+    test_mode=False
+):
+    """
+    获取AI Studio官方模型的Model Tree（衍生模型）
+
+    Args:
+        progress_callback: 进度回调函数
+        include_official_publishers: 官方发布者列表（默认使用标准列表）
+        test_mode: 测试模式，只处理第一个模型
+
+    Returns:
+        tuple: (DataFrame, total_count) 衍生模型数据和数量
+    """
+    from ..utils import create_chrome_driver
+    from ..config import SELENIUM_TIMEOUT
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import TimeoutException, NoSuchElementException
+    import time
+    import re
+
+    print("\n" + "=" * 80)
+    print("🌳 开始获取 AI Studio Model Tree")
+    print("=" * 80)
+
+    # 获取官方模型列表
+    official_models_df = get_aistudio_official_models()
+    if official_models_df is None or official_models_df.empty:
+        print("❌ 没有找到AI Studio官方模型")
+        return pd.DataFrame(), 0
+
+    # 测试模式：只处理第一个模型
+    if test_mode:
+        official_models_df = official_models_df.head(1)
+        print(f"🧪 测试模式：只处理第一个模型")
+
+    driver = None
+    all_derivative_models = []
+    processed_count = 0
+    total_count = len(official_models_df)
+
+    try:
+        driver = create_chrome_driver()
+
+        for idx, row in official_models_df.iterrows():
+            base_model_name = row['model_name']
+            base_url = row['url']
+
+            print(f"\n{'=' * 80}")
+            print(f"[{idx + 1}/{total_count}] 处理模型: {base_model_name}")
+            print(f"{'=' * 80}")
+
+            # 步骤1：获取衍生类型列表
+            print(f"访问: {base_url}")
+            driver.get(base_url)
+
+            try:
+                WebDriverWait(driver, SELENIUM_TIMEOUT).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                time.sleep(2)
+
+                # 关闭广告横幅（每个模型页面关闭一次）
+                try:
+                    close_button_selectors = [
+                        "#main > div.a-s-6th-footer-banner-wrapper > a > span",
+                        "div.a-s-6th-footer-banner-wrapper > a > span",
+                        ".a-s-6th-footer-banner-wrapper a span",
+                    ]
+
+                    for selector in close_button_selectors:
+                        try:
+                            close_buttons = driver.find_elements(By.CSS_SELECTOR, selector)
+                            if close_buttons:
+                                close_buttons[0].click()
+                                print(f"  ✅ 已关闭横幅广告")
+                                time.sleep(0.5)
+                                break
+                        except:
+                            continue
+
+                    # 如果找不到关闭按钮，使用JavaScript移除
+                    try:
+                        driver.execute_script("""
+                            var bannerWrapper = document.querySelector('div.a-s-6th-footer-banner-wrapper');
+                            if (bannerWrapper) {
+                                bannerWrapper.style.display = 'none';
+                            }
+                        """)
+                    except:
+                        pass
+
+                except Exception as e:
+                    # 关闭横幅失败不影响继续执行
+                    pass
+
+            except TimeoutException:
+                print(f"⚠️  页面加载超时，跳过")
+                continue
+
+            # 查找模型血缘树元素
+            try:
+                tree_items = driver.find_elements(
+                    By.CSS_SELECTOR,
+                    "div.model-lineage-tree-item-wrap.child-model"
+                )
+
+                if not tree_items:
+                    print(f"  ⚪️  没有找到衍生类型")
+                    continue
+
+                print(f"  ✅ 找到 {len(tree_items)} 个衍生类型")
+
+                # 步骤2：先收集所有衍生类型的信息（避免stale element reference）
+                tree_type_list = []
+                for tree_item in tree_items:
+                    try:
+                        # 检查是否为"当前模型"标记（说明当前模型本身是衍生版本，不需要爬取）
+                        try:
+                            opt_current_elements = tree_item.find_elements(By.CSS_SELECTOR, "div.opt-current")
+                            if opt_current_elements:
+                                # 这是一个"当前模型"标记，跳过
+                                try:
+                                    skip_name_zh = tree_item.find_element(By.CSS_SELECTOR, "div.name-zh").text.strip()
+                                    skip_name_en = tree_item.find_element(By.CSS_SELECTOR, "div.name-en").text.strip()
+                                    print(f"  ⏭️  跳过 '{skip_name_zh} / {skip_name_en}'（当前模型本身是衍生版本）")
+                                except:
+                                    print(f"  ⏭️  跳过一个衍生类型（当前模型本身是衍生版本）")
+                                continue
+                        except:
+                            pass
+
+                        # 提取类型信息
+                        name_zh = tree_item.find_element(
+                            By.CSS_SELECTOR, "div.name-zh"
+                        ).text.strip()
+
+                        name_en = tree_item.find_element(
+                            By.CSS_SELECTOR, "div.name-en"
+                        ).text.strip()
+
+                        # 提取模型数量
+                        count_text = tree_item.find_element(
+                            By.CSS_SELECTOR, "div.opt-link"
+                        ).text.strip()
+
+                        count_match = re.search(r'(\d+)', count_text)
+                        count = int(count_match.group(1)) if count_match else 0
+
+                        # 获取链接
+                        link_element = tree_item.find_element(
+                            By.CSS_SELECTOR, "a.model-lineage-tree-item"
+                        )
+                        link = link_element.get_attribute('href')
+
+                        tree_type_list.append({
+                            'name_zh': name_zh,
+                            'name_en': name_en,
+                            'count': count,
+                            'link': link
+                        })
+                    except Exception as e:
+                        print(f"  ⚠️  提取衍生类型信息时出错: {e}")
+                        continue
+
+                # 步骤3：对每个衍生类型获取模型列表
+                for idx, tree_type in enumerate(tree_type_list):
+                    try:
+                        name_zh = tree_type['name_zh']
+                        name_en = tree_type['name_en']
+                        count = tree_type['count']
+                        link = tree_type['link']
+
+                        print(f"\n  📂 衍生类型: {name_zh} / {name_en} ({count}个模型)")
+
+                        if link.startswith('/'):
+                            full_url = f"https://aistudio.baidu.com{link}"
+                        else:
+                            full_url = link
+
+                        # 访问衍生模型列表页
+                        driver.get(full_url)
+
+                        try:
+                            WebDriverWait(driver, SELENIUM_TIMEOUT).until(
+                                EC.presence_of_element_located(
+                                    (By.CSS_SELECTOR, "div.ai-model-list-wapper")
+                                )
+                            )
+                            time.sleep(2)
+                        except TimeoutException:
+                            print(f"    ⚠️  衍生模型列表页加载超时")
+                            continue
+
+                        # 提取所有模型卡片
+                        cards = driver.find_elements(
+                            By.CSS_SELECTOR,
+                            "div.ai-model-list-wapper > div"
+                        )
+
+                        print(f"    ✅ 找到 {len(cards)} 个模型")
+
+                        for card in cards:
+                            try:
+                                # 获取模型名称
+                                full_model_name = card.find_element(
+                                    By.CSS_SELECTOR,
+                                    "div.ai-model-list-wapper-card-right-desc"
+                                ).text.strip()
+
+                                # 获取发布者
+                                publisher = card.find_element(
+                                    By.CSS_SELECTOR,
+                                    "span.ai-model-list-wapper-card-right-detail-one-publisher"
+                                ).text.strip()
+
+                                # 获取下载量
+                                detail_items = card.find_elements(
+                                    By.CSS_SELECTOR,
+                                    "div.ai-model-list-wapper-card-right-detail-one-item-tip"
+                                )
+
+                                usage_count = detail_items[0].find_element(
+                                    By.CSS_SELECTOR,
+                                    "span.ai-model-list-wapper-card-right-detail-one-like"
+                                ).text.strip()
+
+                                # 处理模型名称
+                                if full_model_name.startswith("PaddlePaddle/"):
+                                    model_name = full_model_name[len("PaddlePaddle/"):]
+                                else:
+                                    model_name = full_model_name
+
+                                # 创建记录
+                                record = {
+                                    'date': date.today().isoformat(),
+                                    'repo': 'AI Studio',
+                                    'model_name': model_name,
+                                    'publisher': publisher,
+                                    'download_count': usage_count,
+                                    'model_category': classify_model(
+                                        model_name,
+                                        publisher,
+                                        base_model_name
+                                    ),
+                                    'model_type': name_en.lower(),  # adapter, finetune, etc.
+                                    'base_model': base_model_name,
+                                    'data_source': 'model_tree',
+                                    'search_keyword': base_model_name
+                                }
+
+                                all_derivative_models.append(record)
+
+                            except Exception as e:
+                                print(f"      ⚠️  处理模型时出错: {e}")
+                                continue
+
+                        # 返回基础模型详情页
+                        driver.back()
+                        time.sleep(1)
+
+                    except Exception as e:
+                        print(f"  ⚠️  处理衍生类型时出错: {e}")
+                        continue
+
+                processed_count += 1
+                if progress_callback:
+                    progress_callback(processed_count)
+
+            except NoSuchElementException:
+                print(f"  ⚪️  未找到模型血缘树元素")
+                continue
+
+        # 转换为DataFrame
+        if all_derivative_models:
+            df = pd.DataFrame(all_derivative_models)
+            print(f"\n{'=' * 80}")
+            print(f"✅ 成功获取 {len(df)} 个衍生模型")
+            print(f"{'=' * 80}")
+
+            return df, len(df)
+        else:
+            print(f"\n{'=' * 80}")
+            print(f"⚠️  没有找到任何衍生模型")
+            print(f"{'=' * 80}")
+            return pd.DataFrame(), 0
+
+    except Exception as e:
+        print(f"\n❌ 获取AI Studio Model Tree失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return pd.DataFrame(), 0
+
+    finally:
+        if driver:
+            driver.quit()
+
+
+def update_aistudio_model_tree(save_to_db=True, test_mode=False):
+    """
+    更新AI Studio Model Tree数据（包含去重处理）
+
+    Args:
+        save_to_db: 是否保存到数据库
+        test_mode: 测试模式，只处理第一个模型
+
+    Returns:
+        tuple: (DataFrame, total_count) 衍生模型数据和数量
+    """
+    print("\n🔄 开始更新AI Studio Model Tree数据...")
+
+    # 获取衍生模型
+    df, total_count = fetch_aistudio_model_tree(test_mode=test_mode)
+
+    if df.empty:
+        print("⚠️ 没有获取到任何衍生模型数据")
+        return df, 0
+
+    # 去重处理：检查数据库中是否已存在相同的模型（根据publisher和model_name）
+    if save_to_db:
+        try:
+            from ..db import load_data_from_db, save_to_db as save_to_db_func
+            import sqlite3
+
+            # 获取现有AI Studio数据
+            conn = sqlite3.connect(DB_PATH)
+            existing_query = """
+                SELECT DISTINCT publisher, model_name
+                FROM model_downloads
+                WHERE repo = 'AI Studio'
+            """
+            existing_df = pd.read_sql_query(existing_query, conn)
+            conn.close()
+
+            if not existing_df.empty:
+                # 创建已存在模型的集合
+                existing_models = set(
+                    f"{row['publisher']}/{row['model_name']}"
+                    for _, row in existing_df.iterrows()
+                )
+
+                # 过滤掉已存在的模型
+                df['model_key'] = df['publisher'] + '/' + df['model_name']
+                new_df = df[~df['model_key'].isin(existing_models)].copy()
+                new_df = new_df.drop(columns=['model_key'])
+
+                print(f"📊 去重前: {len(df)} 条，去重后: {len(new_df)} 条")
+                print(f"🗑️  过滤掉 {len(df) - len(new_df)} 条已存在的记录")
+
+                if new_df.empty:
+                    print("⚠️ 没有新的模型需要保存")
+                    return df, 0
+
+                df = new_df
+
+            # 保存到数据库
+            save_to_db_func(df, DB_PATH)
+            print(f"💾 已保存 {len(df)} 条新记录到数据库")
+
+        except Exception as e:
+            print(f"❌ 保存数据时出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    return df, total_count
