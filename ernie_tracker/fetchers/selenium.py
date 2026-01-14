@@ -192,28 +192,54 @@ class AIStudioFetcher(BaseFetcher):
             model_url = driver.current_url
             self._log_info(f"  [详情页 #{card_index}] ✅ 获取URL: {model_url} (耗时: {(time.time() - url_start)*1000:.2f}ms)")
 
-            self._log_debug(f"  [详情页 #{card_index}] 等待下载量元素出现")
-            element_wait_start = time.time()
-            element = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.XPATH,
-                    "//*[@id='main']/div[1]/div[2]/div/div/div[1]/div/div[1]/div[4]/div[2]"))
-            )
-            self._log_debug(f"  [详情页 #{card_index}] 下载量元素已出现 (耗时: {(time.time() - element_wait_start)*1000:.2f}ms)")
+            # 获取下载量（带重试机制）
+            max_retries = 3
+            detailed_count = None
 
-            extract_start = time.time()
-            detailed_count = extract_numbers(element.text)
-            self._log_info(f"  [详情页 #{card_index}] ✅ 获取下载量: {detailed_count} (提取耗时: {(time.time() - extract_start)*1000:.2f}ms)")
+            for retry_count in range(max_retries):
+                self._log_debug(f"  [详情页 #{card_index}] 第 {retry_count + 1} 次尝试获取下载量")
 
-            # 核对列表页和详情页下载量（不中断流程，只记录警告）
-            if list_usage_count:
-                try:
-                    is_valid, reason = self._validate_download_count(list_usage_count, detailed_count)
-                    if is_valid:
-                        self._log_info(f"  [详情页 #{card_index}] ✅ 下载量核对通过: 列表页={list_usage_count}, 详情页={detailed_count}")
-                    else:
-                        self._log_warning(f"  [详情页 #{card_index}] ⚠️  下载量核对失败: {reason}")
-                except Exception as e:
-                    self._log_warning(f"  [详情页 #{card_index}] ⚠️  下载量核对异常: {e}")
+                self._log_debug(f"  [详情页 #{card_index}] 等待下载量元素出现")
+                element_wait_start = time.time()
+                element = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.XPATH,
+                        "//*[@id='main']/div[1]/div[2]/div/div/div[1]/div/div[1]/div[4]/div[2]"))
+                )
+                self._log_debug(f"  [详情页 #{card_index}] 下载量元素已出现 (耗时: {(time.time() - element_wait_start)*1000:.2f}ms)")
+
+                extract_start = time.time()
+                detailed_count = extract_numbers(element.text)
+                self._log_info(f"  [详情页 #{card_index}] ✅ 获取下载量: {detailed_count} (提取耗时: {(time.time() - extract_start)*1000:.2f}ms)")
+
+                # 核对列表页和详情页下载量
+                if list_usage_count:
+                    try:
+                        is_valid, reason = self._validate_download_count(list_usage_count, detailed_count)
+                        if is_valid:
+                            self._log_info(f"  [详情页 #{card_index}] ✅ 下载量核对通过: 列表页={list_usage_count}, 详情页={detailed_count}")
+                            break  # 核对通过，退出重试循环
+                        else:
+                            self._log_warning(f"  [详情页 #{card_index}] ⚠️  下载量核对失败: {reason}")
+
+                            # 如果是最后一次重试，不再重试
+                            if retry_count == max_retries - 1:
+                                self._log_error(f"  [详情页 #{card_index}] ❌ 已达到最大重试次数({max_retries})，使用详情页数据: {detailed_count}")
+                                break
+
+                            # 等待并刷新页面重试
+                            self._log_info(f"  [详情页 #{card_index}] 等待2秒后刷新页面重试...")
+                            time.sleep(2)
+                            driver.refresh()
+                            self._log_debug(f"  [详情页 #{card_index}] 页面已刷新，等待重新加载...")
+                            time.sleep(2)
+
+                    except Exception as e:
+                        self._log_warning(f"  [详情页 #{card_index}] ⚠️  下载量核对异常: {e}")
+                        if retry_count == max_retries - 1:
+                            break
+                else:
+                    # 没有列表页数据用于核对，直接使用详情页数据
+                    break
 
             # 返回搜索页
             self._log_debug(f"  [详情页 #{card_index}] 准备返回搜索页")
