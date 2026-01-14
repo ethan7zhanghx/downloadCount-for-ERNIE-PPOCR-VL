@@ -1,6 +1,8 @@
 """基于 Selenium 的爬虫实现 - AI Studio, Gitee, Modelers"""
 import time
 import re
+import logging
+from datetime import datetime
 from .base_fetcher import BaseFetcher
 from ..utils import create_chrome_driver, is_simplified_count, extract_numbers
 from ..config import SELENIUM_TIMEOUT
@@ -9,95 +11,251 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
 
+# 配置详细的日志记录器
+def setup_detailed_logger(name):
+    """设置带时间戳的详细日志记录器"""
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)
+
+    # 避免重复添加handler
+    if not logger.handlers:
+        # 文件handler - 记录所有详细信息
+        file_handler = logging.FileHandler(f'aistudio_crawl_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log', encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
+        file_formatter = logging.Formatter('%(asctime)s.%(msecs)03d | %(levelname)-8s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+        file_handler.setFormatter(file_formatter)
+        logger.addHandler(file_handler)
+
+        # 控制台handler - 只显示重要信息
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        console_formatter = logging.Formatter('%(levelname)-8s | %(message)s')
+        console_handler.setFormatter(console_formatter)
+        logger.addHandler(console_handler)
+
+    return logger
+
 
 class AIStudioFetcher(BaseFetcher):
     """AI Studio 爬虫"""
 
-    def __init__(self):
+    def __init__(self, test_mode=False, enable_detailed_log=False):
+        """
+        Args:
+            test_mode: 测试模式，每个页面只获取第一个和最后一个模型
+            enable_detailed_log: 启用详细日志（仅用于调试，默认关闭）
+        """
         super().__init__("AI Studio")
+        self.test_mode = test_mode
+        self.enable_detailed_log = enable_detailed_log
+        self.logger = None
 
-    def _get_detailed_info(self, driver, card, card_index):
+        if self.enable_detailed_log:
+            self.logger = setup_detailed_logger("AIStudioFetcher")
+            self._log_info("=" * 80)
+            self._log_info(f"AIStudioFetcher 初始化完成 | 测试模式: {self.test_mode} | 详细日志: {self.enable_detailed_log}")
+            self._log_info("=" * 80)
+
+    def _log(self, level, message):
+        """记录日志（如果启用了详细日志）"""
+        if self.logger:
+            # 在消息前添加时间戳
+            timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]  # 毫秒级
+            message_with_time = f"[{timestamp}] {message}"
+            getattr(self.logger, level)(message_with_time)
+
+    def _log_debug(self, message):
+        self._log('debug', message)
+
+    def _log_info(self, message):
+        self._log('info', message)
+
+    def _log_warning(self, message):
+        self._log('warning', message)
+
+    def _log_error(self, message):
+        self._log('error', message)
+
+    def _parse_download_count(self, count_str):
+        """解析下载量字符串，转换为数字
+
+        Args:
+            count_str: 下载量字符串，可能是 "72456", "72.4k", "7.2w" 等
+
+        Returns:
+            int: 解析后的数字
+        """
+        if not count_str:
+            return 0
+
+        count_str = str(count_str).strip().upper()
+
+        # 移除逗号等分隔符
+        count_str = count_str.replace(',', '')
+
+        # 处理 k/K (千)
+        if 'K' in count_str:
+            num = float(count_str.replace('K', '').replace('K', ''))
+            return int(num * 1000)
+
+        # 处理 w/W (万)
+        if 'W' in count_str:
+            num = float(count_str.replace('W', '').replace('W', ''))
+            return int(num * 10000)
+
+        # 纯数字
+        try:
+            return int(count_str)
+        except:
+            return 0
+
+    def _validate_download_count(self, list_count_str, detail_count_int):
+        """验证列表页和详情页下载量是否匹配
+
+        Args:
+            list_count_str: 列表页显示的下载量（可能是 "72.4k"）
+            detail_count_int: 详情页的下载量（可能是 72456）
+
+        Returns:
+            tuple: (is_valid, reason)
+                - is_valid: 是否匹配
+                - reason: 不匹配的原因
+        """
+        list_count = self._parse_download_count(list_count_str)
+
+        # 允许 10% 的误差（因为可能有人在下载数据）
+        tolerance = 0.1
+        min_expected = list_count * (1 - tolerance)
+        max_expected = list_count * (1 + tolerance)
+
+        if detail_count_int < min_expected:
+            return False, f"详情页下载量({detail_count_int}) < 列表页({list_count_str}={list_count})的{1-tolerance:.0%}"
+
+        if detail_count_int > max_expected:
+            return False, f"详情页下载量({detail_count_int}) > 列表页({list_count_str}={list_count})的{1+tolerance:.0%}，可能不是同一时间点的数据"
+
+        return True, "OK"
+
+    def _get_detailed_info(self, driver, card, card_index, list_usage_count=None):
         """获取详情页信息（URL和详细下载量）- 点击并返回
 
         Args:
             driver: WebDriver instance
             card: WebElement of the model card
             card_index: Index of the card (for debugging)
+            list_usage_count: 列表页的下载量（用于核对）
 
         Returns:
             tuple: (detailed_count, model_url) 或 (None, None)
 
         注意：点击卡片返回后，AI Studio会回到第一页（URL不变），调用方需要处理
         """
+        start_time = time.time()
+        self._log_debug(f"  [详情页 #{card_index}] 开始获取详情页信息")
+        if list_usage_count:
+            self._log_debug(f"  [详情页 #{card_index}] 列表页下载量: {list_usage_count}")
+
         try:
-            print(f"    [详情页] 点击卡片 {card_index} 进入详情页...")
-
-            # 尝试关闭横幅广告
-            self._close_banner(driver)
-
-            # 滚动到卡片位置，确保可见
+            self._log_debug(f"  [详情页 #{card_index}] 滚动到卡片位置")
+            scroll_start = time.time()
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card)
             time.sleep(0.5)
+            self._log_debug(f"  [详情页 #{card_index}] 滚动完成 (耗时: {(time.time() - scroll_start)*1000:.2f}ms)")
 
             # 使用JavaScript点击，避免被遮挡
+            click_start = time.time()
             try:
+                self._log_debug(f"  [详情页 #{card_index}] 尝试JavaScript点击")
                 driver.execute_script("arguments[0].click();", card)
+                self._log_debug(f"  [详情页 #{card_index}] JavaScript点击成功 (耗时: {(time.time() - click_start)*1000:.2f}ms)")
             except Exception as e:
-                print(f"    [详情页] JavaScript点击失败，尝试普通点击: {e}")
+                self._log_warning(f"  [详情页 #{card_index}] JavaScript点击失败: {e}，尝试普通点击")
                 card.click()
+                self._log_debug(f"  [详情页 #{card_index}] 普通点击完成 (耗时: {(time.time() - click_start)*1000:.2f}ms)")
 
+            sleep_start = time.time()
             time.sleep(1)
+            self._log_debug(f"  [详情页 #{card_index}] 点击后等待完成 (耗时: {(time.time() - sleep_start)*1000:.2f}ms)")
 
             # 等待详情页加载
+            self._log_debug(f"  [详情页 #{card_index}] 等待详情页body元素出现")
+            wait_start = time.time()
             WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
             )
+            self._log_debug(f"  [详情页 #{card_index}] body元素已出现 (耗时: {(time.time() - wait_start)*1000:.2f}ms)")
+
             time.sleep(1)
 
             # 获取详情页URL和下载量
+            url_start = time.time()
             model_url = driver.current_url
-            print(f"    [详情页] ✅ 获取详情页URL: {model_url}")
+            self._log_info(f"  [详情页 #{card_index}] ✅ 获取URL: {model_url} (耗时: {(time.time() - url_start)*1000:.2f}ms)")
 
+            self._log_debug(f"  [详情页 #{card_index}] 等待下载量元素出现")
+            element_wait_start = time.time()
             element = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.XPATH,
                     "//*[@id='main']/div[1]/div[2]/div/div/div[1]/div/div[1]/div[4]/div[2]"))
             )
+            self._log_debug(f"  [详情页 #{card_index}] 下载量元素已出现 (耗时: {(time.time() - element_wait_start)*1000:.2f}ms)")
+
+            extract_start = time.time()
             detailed_count = extract_numbers(element.text)
-            print(f"    [详情页] ✅ 获取详细下载量: {detailed_count}")
+            self._log_info(f"  [详情页 #{card_index}] ✅ 获取下载量: {detailed_count} (提取耗时: {(time.time() - extract_start)*1000:.2f}ms)")
+
+            # 核对列表页和详情页下载量
+            if list_usage_count:
+                is_valid, reason = self._validate_download_count(list_usage_count, detailed_count)
+                if is_valid:
+                    self._log_info(f"  [详情页 #{card_index}] ✅ 下载量核对通过: 列表页={list_usage_count}, 详情页={detailed_count}")
+                else:
+                    self._log_warning(f"  [详情页 #{card_index}] ⚠️  下载量核对失败: {reason}")
 
             # 返回搜索页
-            print(f"    [详情页] 返回搜索页...")
+            self._log_debug(f"  [详情页 #{card_index}] 准备返回搜索页")
+            back_start = time.time()
             driver.back()
+            self._log_debug(f"  [详情页 #{card_index}] driver.back()调用完成 (耗时: {(time.time() - back_start)*1000:.2f}ms)")
+
             time.sleep(1)
 
             # 等待搜索页加载
             try:
+                self._log_debug(f"  [详情页 #{card_index}] 等待搜索页容器出现")
+                search_wait_start = time.time()
                 WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, "div.ai-model-list-wapper"))
                 )
+                self._log_debug(f"  [详情页 #{card_index}] 搜索页容器已出现 (耗时: {(time.time() - search_wait_start)*1000:.2f}ms)")
             except:
-                print(f"    [详情页] ⚠️  等待搜索页超时")
+                self._log_warning(f"  [详情页 #{card_index}] ⚠️  等待搜索页超时")
 
             time.sleep(0.5)
 
-            print(f"    [详情页] ✅ 已返回搜索页")
+            total_time = time.time() - start_time
+            self._log_info(f"  [详情页 #{card_index}] ✅ 详情页处理完成 (总耗时: {total_time*1000:.2f}ms)")
 
             return detailed_count, model_url
 
         except Exception as e:
-            print(f"    [详情页] ❌ 获取详情页信息失败: {e}")
+            self._log_error(f"  [详情页 #{card_index}] ❌ 获取详情页失败: {e} (耗时: {(time.time() - start_time)*1000:.2f}ms)")
             import traceback
-            traceback.print_exc()
+            self._log_debug(f"  [详情页 #{card_index}] 异常堆栈:\n{traceback.format_exc()}")
             # 尝试返回
             try:
+                self._log_debug(f"  [详情页 #{card_index}] 异常后尝试返回搜索页")
                 driver.back()
                 time.sleep(1)
             except:
-                pass
+                self._log_error(f"  [详情页 #{card_index}] 返回搜索页也失败了")
             return None, None
 
     def _close_banner(self, driver):
         """尝试关闭横幅广告"""
+        start_time = time.time()
+        self._log_debug(f"    [关闭横幅] 尝试关闭横幅广告")
+
         try:
             # 优先使用准确的关闭按钮选择器
             close_button_selectors = [
@@ -106,33 +264,40 @@ class AIStudioFetcher(BaseFetcher):
                 ".a-s-6th-footer-banner-wrapper a span",  # 更宽松的选择器
             ]
 
-            for selector in close_button_selectors:
+            for idx, selector in enumerate(close_button_selectors):
                 try:
+                    self._log_debug(f"    [关闭横幅] 尝试选择器 #{idx+1}: {selector}")
                     close_buttons = driver.find_elements(By.CSS_SELECTOR, selector)
                     if close_buttons:
+                        self._log_debug(f"    [关闭横幅] 找到 {len(close_buttons)} 个关闭按钮")
                         close_buttons[0].click()
-                        print(f"    [关闭横幅] 已点击关闭按钮: {selector}")
+                        self._log_info(f"    [关闭横幅] ✅ 已点击关闭按钮 (选择器: #{idx+1}, 耗时: {(time.time() - start_time)*1000:.2f}ms)")
                         time.sleep(0.5)
                         return True
-                except:
+                    else:
+                        self._log_debug(f"    [关闭横幅] 选择器 #{idx+1} 未找到元素")
+                except Exception as e:
+                    self._log_debug(f"    [关闭横幅] 选择器 #{idx+1} 失败: {e}")
                     continue
 
             # 如果找不到关闭按钮，使用JavaScript移除整个横幅
             try:
+                self._log_debug(f"    [关闭横幅] 尝试使用JavaScript隐藏横幅")
                 driver.execute_script("""
                     var bannerWrapper = document.querySelector('div.a-s-6th-footer-banner-wrapper');
                     if (bannerWrapper) {
                         bannerWrapper.style.display = 'none';
                     }
                 """)
-                print(f"    [关闭横幅] 已使用JavaScript隐藏横幅wrapper")
+                self._log_info(f"    [关闭横幅] ✅ 已使用JavaScript隐藏横幅wrapper (耗时: {(time.time() - start_time)*1000:.2f}ms)")
                 return True
-            except:
-                pass
+            except Exception as e:
+                self._log_debug(f"    [关闭横幅] JavaScript隐藏失败: {e}")
 
         except Exception as e:
-            pass
+            self._log_warning(f"    [关闭横幅] ⚠️  关闭横幅过程异常: {e}")
 
+        self._log_debug(f"    [关闭横幅] 未找到或无法关闭横幅 (耗时: {(time.time() - start_time)*1000:.2f}ms)")
         return False
 
     def _restore_to_page(self, driver, page_first_model):
@@ -145,60 +310,65 @@ class AIStudioFetcher(BaseFetcher):
         Returns:
             bool: 是否成功恢复到目标页
         """
-        try:
-            print(f"    [恢复页] 检测到回到第一页，正在重新翻页到目标页...")
-            print(f"    [恢复页] 目标页标识（第一个模型）: {page_first_model}")
+        start_time = time.time()
+        self._log_warning(f"    [恢复页] 检测到回到第一页，开始恢复到目标页")
+        self._log_info(f"    [恢复页] 目标页标识（第一个模型）: {page_first_model}")
 
+        try:
             max_page_clicks = 50  # 最多点击50页，防止无限循环
             page_clicks = 0
 
             while page_clicks < max_page_clicks:
                 # 获取当前页第一个模型
+                self._log_debug(f"    [恢复页] 第 {page_clicks + 1} 次尝试：获取当前页卡片")
                 cards = driver.find_elements(By.CSS_SELECTOR, "div.ai-model-list-wapper > div")
                 if len(cards) == 0:
-                    print(f"    [恢复页] ❌ 没有找到卡片")
+                    self._log_error(f"    [恢复页] ❌ 没有找到卡片")
                     return False
 
+                self._log_debug(f"    [恢复页] 找到 {len(cards)} 个卡片")
                 current_first = cards[0].find_element(
                     By.CSS_SELECTOR, "div.ai-model-list-wapper-card-right-desc"
                 ).text.strip()
 
+                self._log_debug(f"    [恢复页] 当前页第一个模型: {current_first}")
+
                 if current_first == page_first_model:
-                    print(f"    [恢复页] ✅ 已恢复到目标页")
+                    self._log_info(f"    [恢复页] ✅ 已恢复到目标页 (点击次数: {page_clicks + 1}, 耗时: {(time.time() - start_time)*1000:.2f}ms)")
                     return True
 
                 # 点击下一页
                 try:
-                    # 尝试关闭横幅广告
-                    self._close_banner(driver)
-
                     next_button = driver.find_element(By.CSS_SELECTOR, "li.ant-pagination-next button")
                     if not next_button.is_enabled():
-                        print(f"    [恢复页] ❌ 已到最后一页，但未找到目标页")
+                        self._log_error(f"    [恢复页] ❌ 已到最后一页，但未找到目标页 (已点击: {page_clicks + 1}次)")
                         return False
 
-                    print(f"    [恢复页] 点击下一页 ({page_clicks + 1}/{max_page_clicks})...")
+                    self._log_info(f"    [恢复页] 点击下一页 ({page_clicks + 1}/{max_page_clicks})...")
 
                     # 使用JavaScript点击
                     try:
+                        click_start = time.time()
                         driver.execute_script("arguments[0].click();", next_button)
-                    except:
+                        self._log_debug(f"    [恢复页] JavaScript点击成功 (耗时: {(time.time() - click_start)*1000:.2f}ms)")
+                    except Exception as e:
+                        self._log_warning(f"    [恢复页] JavaScript点击失败: {e}，尝试普通点击")
                         next_button.click()
 
                     time.sleep(1)
-                except:
-                    print(f"    [恢复页] ❌ 无法找到或点击下一页按钮")
+                except Exception as e:
+                    self._log_error(f"    [恢复页] ❌ 无法找到或点击下一页按钮: {e}")
                     return False
 
                 page_clicks += 1
 
-            print(f"    [恢复页] ❌ 超过最大翻页次数，未找到目标页")
+            self._log_error(f"    [恢复页] ❌ 超过最大翻页次数 ({max_page_clicks})，未找到目标页 (耗时: {(time.time() - start_time)*1000:.2f}ms)")
             return False
 
         except Exception as e:
-            print(f"    [恢复页] ❌ 恢复页失败: {e}")
+            self._log_error(f"    [恢复页] ❌ 恢复页失败: {e} (耗时: {(time.time() - start_time)*1000:.2f}ms)")
             import traceback
-            traceback.print_exc()
+            self._log_debug(f"    [恢复页] 异常堆栈:\n{traceback.format_exc()}")
             return False
 
     def fetch(self, progress_callback=None, progress_total=None):
@@ -227,12 +397,16 @@ class AIStudioFetcher(BaseFetcher):
                         wait.until(EC.presence_of_element_located(
                             (By.CSS_SELECTOR, "div.ai-model-list-wapper")
                         ))
-                        print(f"[AI Studio] {search_term} 页面加载成功")
+                        self._log_info(f"[AI Studio] {search_term} 页面加载成功")
                     except TimeoutException:
-                        print(f"[AI Studio] {search_term} 页面加载超时，可能是网络问题或页面结构变化")
+                        self._log_error(f"[AI Studio] {search_term} 页面加载超时，可能是网络问题或页面结构变化")
                         if attempt < max_retries - 1:
                             continue
                         raise
+
+                    # 页面加载成功后，立即关闭横幅（每个搜索词只关闭一次）
+                    self._log_info(f"[AI Studio] 尝试关闭横幅广告")
+                    self._close_banner(driver)
 
                     # 开始爬取数据
                     page_num = 1
@@ -242,38 +416,46 @@ class AIStudioFetcher(BaseFetcher):
                         ))
 
                         cards = driver.find_elements(By.CSS_SELECTOR, "div.ai-model-list-wapper > div")
-                        print(f"[AI Studio] {search_term} 第{page_num}页，有 {len(cards)} 个卡片")
+                        self._log_info(f"[AI Studio] {search_term} 第{page_num}页，有 {len(cards)} 个卡片")
 
                         # 记录当前页第一个模型（用于恢复）
                         if len(cards) > 0:
                             page_first_model = cards[0].find_element(
                                 By.CSS_SELECTOR, "div.ai-model-list-wapper-card-right-desc"
                             ).text.strip()
-                            print(f"[AI Studio] 当前页标识（第一个模型）: {page_first_model}")
+                            self._log_info(f"[AI Studio] 当前页标识（第一个模型）: {page_first_model}")
                         else:
                             page_first_model = None
-                            print(f"[AI Studio] ⚠️  当前页没有卡片，跳过")
+                            self._log_warning(f"[AI Studio] ⚠️  当前页没有卡片，跳过")
                             break
 
-                        for i in range(len(cards)):
+                        # 测试模式：只处理第一个和最后一个卡片
+                        if self.test_mode and len(cards) > 2:
+                            indices_to_process = [0, len(cards) - 1]
+                            self._log_info(f"[AI Studio] 🧪 测试模式：只处理第1个和第{len(cards)}个卡片")
+                        else:
+                            indices_to_process = range(len(cards))
+
+                        for i in indices_to_process:
                             try:
-                                print(f"[AI Studio] ========== 处理卡片 {i}/{len(cards)-1} ==========")
+                                self._log_info(f"[AI Studio] ========== 处理卡片 {i}/{len(cards)-1} ==========")
 
                                 # 重新获取cards（因为可能已过时）
                                 cards = driver.find_elements(By.CSS_SELECTOR, "div.ai-model-list-wapper > div")
                                 if i >= len(cards):
-                                    print(f"[AI Studio] ⚠️  i={i} 超出cards范围({len(cards)})，跳过")
+                                    self._log_warning(f"[AI Studio] ⚠️  i={i} 超出cards范围({len(cards)})，跳过")
                                     break
 
                                 card = cards[i]
+                                card_start_time = time.time()
                                 full_model_name = card.find_element(
                                     By.CSS_SELECTOR, "div.ai-model-list-wapper-card-right-desc"
                                 ).text.strip()
-                                print(f"[AI Studio] 模型名称: {full_model_name}")
+                                self._log_info(f"[AI Studio] 模型名称: {full_model_name}")
 
                                 # 检查是否已处理过
                                 if full_model_name in processed_models:
-                                    print(f"[AI Studio] ⏭️  模型已处理过，跳过: {full_model_name}")
+                                    self._log_info(f"[AI Studio] ⏭️  模型已处理过，跳过: {full_model_name}")
                                     continue
 
                                 # 获取下载量和时间
@@ -293,16 +475,17 @@ class AIStudioFetcher(BaseFetcher):
                                         last_modified = detail_items[2].find_element(
                                             By.CSS_SELECTOR, "span.ai-model-list-wapper-card-right-detail-one-like"
                                         ).text.strip()
+                                        self._log_debug(f"[AI Studio] 更新时间: {last_modified}")
                                     except Exception as e:
-                                        print(f"获取更新时间失败: {e}")
+                                        self._log_debug(f"[AI Studio] 获取更新时间失败: {e}")
 
                                 publisher = card.find_element(
                                     By.CSS_SELECTOR, "span.ai-model-list-wapper-card-right-detail-one-publisher"
                                 ).text.strip()
-                                print(f"[AI Studio] 发布者: {publisher}, 下载量: {usage_count}")
+                                self._log_info(f"[AI Studio] 发布者: {publisher}, 下载量: {usage_count}")
 
-                                # 点击获取URL和详细下载量
-                                final_usage_count, model_url = self._get_detailed_info(driver, card, i)
+                                # 点击获取URL和详细下载量（传入列表页的下载量用于核对）
+                                final_usage_count, model_url = self._get_detailed_info(driver, card, i, list_usage_count=usage_count)
 
                                 # 检查是否回到了第一页，如果是则恢复到目标页
                                 if page_first_model:
@@ -313,7 +496,7 @@ class AIStudioFetcher(BaseFetcher):
                                     # 如果没有卡片，刷新页面重新加载
                                     retry_count = 0
                                     while len(cards) == 0 and retry_count < 2:
-                                        print(f"[AI Studio] ⚠️  返回后页面没有卡片，刷新页面... ({retry_count + 1}/2)")
+                                        self._log_warning(f"[AI Studio] ⚠️  返回后页面没有卡片，刷新页面... ({retry_count + 1}/2)")
                                         driver.refresh()
                                         time.sleep(1.5)
                                         wait.until(EC.presence_of_element_located(
@@ -323,7 +506,7 @@ class AIStudioFetcher(BaseFetcher):
                                         retry_count += 1
 
                                     if len(cards) == 0:
-                                        print(f"[AI Studio] ❌ 刷新后仍没有卡片，跳过剩余卡片")
+                                        self._log_error(f"[AI Studio] ❌ 刷新后仍没有卡片，跳过剩余卡片")
                                         break
 
                                     if len(cards) > 0:
@@ -332,22 +515,22 @@ class AIStudioFetcher(BaseFetcher):
                                         ).text.strip()
 
                                         if current_first != page_first_model:
-                                            print(f"[AI Studio] ⚠️  检测到回到第一页，正在恢复...")
-                                            print(f"[AI Studio]   目标页第一个模型: {page_first_model}")
-                                            print(f"[AI Studio]   当前页第一个模型: {current_first}")
+                                            self._log_warning(f"[AI Studio] ⚠️  检测到回到第一页，正在恢复...")
+                                            self._log_info(f"[AI Studio]   目标页第一个模型: {page_first_model}")
+                                            self._log_info(f"[AI Studio]   当前页第一个模型: {current_first}")
 
                                             if not self._restore_to_page(driver, page_first_model):
-                                                print(f"[AI Studio] ❌ 恢复页失败，跳过剩余卡片")
+                                                self._log_error(f"[AI Studio] ❌ 恢复页失败，跳过剩余卡片")
                                                 break
 
                                             # 恢复后重新获取cards
                                             time.sleep(0.5)
                                             cards = driver.find_elements(By.CSS_SELECTOR, "div.ai-model-list-wapper > div")
                                             if i >= len(cards):
-                                                print(f"[AI Studio] ⚠️  恢复后i={i}超出范围，跳过")
+                                                self._log_warning(f"[AI Studio] ⚠️  恢复后i={i}超出范围，跳过")
                                                 break
 
-                                print(f"[AI Studio] ✅ 获取详情页结果: 下载量={final_usage_count}, URL={model_url}")
+                                self._log_info(f"[AI Studio] ✅ 卡片处理完成 | 下载量={final_usage_count}, URL={model_url} (耗时: {(time.time() - card_start_time)*1000:.2f}ms)")
 
                                 # 处理模型名称和发布者
                                 model_name = full_model_name
@@ -391,9 +574,6 @@ class AIStudioFetcher(BaseFetcher):
                         print(f"[AI Studio] ===== 当前页所有卡片处理完成，准备翻页 =====")
 
                         try:
-                            # 尝试关闭横幅广告
-                            self._close_banner(driver)
-
                             next_page_button = driver.find_element(
                                 By.CSS_SELECTOR, "li.ant-pagination-next button"
                             )
