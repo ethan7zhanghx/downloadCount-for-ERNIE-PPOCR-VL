@@ -30,6 +30,10 @@ scripts/ernie_downloads.db
 scripts/paddle_attribution/*.csv
 scripts/paddle_attribution/*.png
 
+# Test files (development/debugging scripts, not part of core functionality)
+tests/
+scripts/test_*.py
+
 # Misc
 *.log
 *.tmp
