@@ -1,40 +1,75 @@
+# =============================================================================
+# Python
+# =============================================================================
 # Byte-compiled / cache
 __pycache__/
 *.py[cod]
 *.pyo
+*.pyd
+.Python
+*.so
 
 # Virtual environments
 .venv/
+venv/
 .env
 *.egg-info/
 build/
 dist/
 
+# =============================================================================
 # Editor artifacts
+# =============================================================================
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
-# Local data and exports (avoid committing sensitive datasets)
+# =============================================================================
+# Data files (DO NOT commit database or exported data)
+# =============================================================================
+data/
 *.db
 *.sqlite
 *.sqlite3
 *.xlsx
+*.xls
+*.csv
+
+# Legacy directories (kept for backwards compatibility)
 backups/
 exports/
 Data/
-ernie_downloads.db
-scripts/ernie_downloads.db
 
-# Generated reports that may contain metrics
-scripts/paddle_attribution/*.csv
-scripts/paddle_attribution/*.png
-
-# Test files (development/debugging scripts, not part of core functionality)
-tests/
-scripts/test_*.py
-
-# Misc
+# =============================================================================
+# Logs and temporary files
+# =============================================================================
+logs/
+temp/
 *.log
 *.tmp
-*.swp
+*.cache
+
+# =============================================================================
+# Generated reports and artifacts
+# =============================================================================
+scripts/paddle_attribution/*.csv
+scripts/paddle_attribution/*.png
+scripts/backups/
+
+# =============================================================================
+# Test files
+# =============================================================================
+tests/
+scripts/test_*.py
+test_*.py
+BUGFIX_*.md
+

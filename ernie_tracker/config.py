@@ -3,7 +3,7 @@
 """
 
 # 数据库配置
-DB_PATH = "ernie_downloads.db"
+DB_PATH = "data/ernie_downloads.db"
 DATA_TABLE = "model_downloads"
 STATS_TABLE = "platform_stats"
 
