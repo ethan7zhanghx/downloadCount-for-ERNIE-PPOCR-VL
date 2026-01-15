@@ -1157,17 +1157,42 @@ def fetch_aistudio_model_tree(
         tuple: (DataFrame, total_count) 衍生模型数据和数量
     """
     from ..utils import create_chrome_driver
-    from ..config import SELENIUM_TIMEOUT
+    from ..config import SELENIUM_TIMEOUT, DB_PATH
+    from ..fetchers.selenium import AIStudioFetcher
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
     from selenium.common.exceptions import TimeoutException, NoSuchElementException
     import time
     import re
+    import sqlite3
 
     print("\n" + "=" * 80)
     print("🌳 开始获取 AI Studio Model Tree")
     print("=" * 80)
+
+    # 获取已存在的模型集合（用于跳过URL获取）
+    existing_models_with_url = set()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        existing_query = """
+            SELECT DISTINCT publisher, model_name
+            FROM model_downloads
+            WHERE repo = 'AI Studio' AND url IS NOT NULL AND url != ''
+        """
+        existing_df = pd.read_sql_query(existing_query, conn)
+        conn.close()
+
+        if not existing_df.empty:
+            existing_models_with_url = set(
+                f"{row['publisher']}/{row['model_name']}"
+                for _, row in existing_df.iterrows()
+            )
+            print(f"📚 数据库中已有 {len(existing_models_with_url)} 个模型带URL")
+            print(f"⚡ 这些模型在列表页将跳过URL获取")
+    except Exception as e:
+        print(f"⚠️  无法加载已存在模型列表: {e}")
+        print(f"🔄 将为所有模型获取URL")
 
     # 获取官方模型列表
     official_models_df = get_aistudio_official_models()
@@ -1180,10 +1205,14 @@ def fetch_aistudio_model_tree(
         official_models_df = official_models_df.head(1)
         print(f"🧪 测试模式：只处理第一个模型")
 
+    # 创建AIStudioFetcher实例以复用_get_detailed_info方法
+    fetcher = AIStudioFetcher(test_mode=test_mode, enable_detailed_log=False)
+
     driver = None
     all_derivative_models = []
     processed_count = 0
     total_count = len(official_models_df)
+    skipped_url_count = 0  # 统计跳过URL获取的模型数
 
     try:
         driver = create_chrome_driver()
@@ -1377,6 +1406,23 @@ def fetch_aistudio_model_tree(
                                 else:
                                     model_name = full_model_name
 
+                                # 检查模型是否已有URL（在search阶段已获取过）
+                                model_key = f"{publisher}/{model_name}"
+                                should_fetch_url = model_key not in existing_models_with_url
+
+                                if not should_fetch_url:
+                                    print(f"      ⏭️  跳过URL获取（已有URL）: {model_key}")
+                                    skipped_url_count += 1
+                                    model_url = None
+                                else:
+                                    # 复用AIStudioFetcher的_get_detailed_info方法获取URL
+                                    print(f"      🔍 获取URL: {model_key}")
+                                    detailed_count, model_url = fetcher._get_detailed_info(
+                                        driver, card, card_idx, list_usage_count=usage_count
+                                    )
+                                    if detailed_count:
+                                        usage_count = detailed_count
+
                                 # 创建记录
                                 record = {
                                     'date': date.today().isoformat(),
@@ -1392,7 +1438,8 @@ def fetch_aistudio_model_tree(
                                     'model_type': name_en.lower(),  # adapter, finetune, etc.
                                     'base_model': base_model_name,
                                     'data_source': 'model_tree',
-                                    'search_keyword': base_model_name
+                                    'search_keyword': base_model_name,
+                                    'url': model_url  # 从search或model tree获取的URL
                                 }
 
                                 all_derivative_models.append(record)
@@ -1422,12 +1469,16 @@ def fetch_aistudio_model_tree(
             df = pd.DataFrame(all_derivative_models)
             print(f"\n{'=' * 80}")
             print(f"✅ 成功获取 {len(df)} 个衍生模型")
+            if skipped_url_count > 0:
+                print(f"⚡ 跳过了 {skipped_url_count} 个已有URL的模型")
             print(f"{'=' * 80}")
 
             return df, len(df)
         else:
             print(f"\n{'=' * 80}")
             print(f"⚠️  没有找到任何衍生模型")
+            if skipped_url_count > 0:
+                print(f"⚡ 跳过了 {skipped_url_count} 个已有URL的模型")
             print(f"{'=' * 80}")
             return pd.DataFrame(), 0
 

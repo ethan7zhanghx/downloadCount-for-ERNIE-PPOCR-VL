@@ -76,6 +76,23 @@ class AIStudioFetcher(BaseFetcher):
     def _log_error(self, message):
         self._log('error', message)
 
+    def _is_simplified_count(self, count_str):
+        """判断下载量是否为简化形式（如1k+, 7.2w等），需要获取精确值
+
+        Args:
+            count_str: 下载量字符串，如 "72456", "72.4k", "7.2w", "1k+"
+
+        Returns:
+            bool: 是否为简化形式
+        """
+        if not count_str:
+            return False
+
+        count_str = str(count_str).strip().upper()
+
+        # 检查是否包含k/K或w/W（简化形式）
+        return 'K' in count_str or 'W' in count_str or '+' in count_str
+
     def _parse_download_count(self, count_str):
         """解析下载量字符串，转换为数字
 
@@ -413,6 +430,30 @@ class AIStudioFetcher(BaseFetcher):
                 processed_count = 0
                 processed_models = set()  # 记录已处理模型的名称（用于去重）
 
+                # 加载已有URL的模型集合（用于跳过URL获取）
+                from ..config import DB_PATH
+                import sqlite3
+                existing_models_with_url = set()
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    existing_query = """
+                        SELECT DISTINCT publisher, model_name
+                        FROM model_downloads
+                        WHERE repo = 'AI Studio' AND url IS NOT NULL AND url != ''
+                    """
+                    import pandas as pd
+                    existing_df = pd.read_sql_query(existing_query, conn)
+                    conn.close()
+
+                    if not existing_df.empty:
+                        existing_models_with_url = set(
+                            f"{row['publisher']}/{row['model_name']}"
+                            for _, row in existing_df.iterrows()
+                        )
+                        print(f"[AI Studio] 📚 数据库中已有 {len(existing_models_with_url)} 个模型带URL，将跳过URL获取")
+                except Exception as e:
+                    print(f"[AI Studio] ⚠️  无法加载已存在模型列表: {e}")
+
                 # 使用ERNIE-4.5和PaddleOCR-VL作为搜索词
                 search_terms = ["ERNIE-4.5", "PaddleOCR-VL"]
 
@@ -513,11 +554,36 @@ class AIStudioFetcher(BaseFetcher):
                                 ).text.strip()
                                 self._log_info(f"[AI Studio] 发布者: {publisher}, 下载量: {usage_count}")
 
-                                # 点击获取URL和详细下载量（传入列表页的下载量用于核对）
-                                final_usage_count, model_url = self._get_detailed_info(driver, card, i, list_usage_count=usage_count)
+                                # 处理模型名称（用于检查是否已有URL）
+                                model_name = full_model_name
+                                if model_name.startswith("PaddlePaddle/"):
+                                    model_name = model_name[len("PaddlePaddle/"):]
 
-                                # 检查是否回到了第一页，如果是则恢复到目标页
-                                if page_first_model:
+                                # 检查是否需要点击获取详细信息
+                                model_key = f"{publisher}/{model_name}"
+                                has_url = model_key in existing_models_with_url
+                                needs_precise_count = self._is_simplified_count(usage_count)
+
+                                # 决策：是否需要点击
+                                should_click = not has_url or needs_precise_count
+
+                                if not should_click:
+                                    # 已有URL且下载量精确，跳过点击
+                                    self._log_info(f"[AI Studio] ⏭️  跳过点击（已有URL且下载量精确）: {model_key}")
+                                    final_usage_count = usage_count
+                                    model_url = None  # URL已存在，不需要从详情页获取
+                                else:
+                                    # 需要点击：获取URL 或 精确下载量
+                                    if has_url and needs_precise_count:
+                                        self._log_info(f"[AI Studio] 🔍 获取精确下载量（已有URL）: {usage_count}")
+                                    elif not has_url:
+                                        self._log_info(f"[AI Studio] 🔍 获取URL和精确下载量: {model_key}")
+
+                                    # 点击获取URL和详细下载量（传入列表页的下载量用于核对）
+                                    final_usage_count, model_url = self._get_detailed_info(driver, card, i, list_usage_count=usage_count)
+
+                                # 检查是否回到了第一页，如果是则恢复到目标页（仅当点击了之后）
+                                if should_click and page_first_model:
                                     # 等待页面稳定，重新获取cards
                                     time.sleep(0.5)
                                     cards = driver.find_elements(By.CSS_SELECTOR, "div.ai-model-list-wapper > div")
