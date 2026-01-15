@@ -280,16 +280,21 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
 
     def fetch_platform_task(platform_name):
         """单个平台抓取任务（纯数据处理，不包含UI操作）"""
-        fetch_func = fetchers_to_use.get(platform_name)
-        if fetch_func:
-            return fetch_platform_data_only(
-                platform_name,
-                fetch_func,
-                save_to_database,
-                log_callback=add_log,
-                progress_update_callback=lambda data: update_progress(platform_name, data)
-            )
-        return platform_name, None, False, 0, "抓取函数未找到", []
+        try:
+            fetch_func = fetchers_to_use.get(platform_name)
+            if fetch_func:
+                return fetch_platform_data_only(
+                    platform_name,
+                    fetch_func,
+                    save_to_database,
+                    log_callback=add_log,
+                    progress_update_callback=lambda data: update_progress(platform_name, data)
+                )
+            return platform_name, None, False, 0, "抓取函数未找到", []
+        except Exception as e:
+            import traceback
+            error_msg = f"任务执行异常: {str(e)}\n{traceback.format_exc()}"
+            return platform_name, None, False, 0, error_msg, []
 
     # 使用线程池并行执行
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(platforms), 4)) as executor:
