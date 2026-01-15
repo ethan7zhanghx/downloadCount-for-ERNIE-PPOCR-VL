@@ -14,6 +14,7 @@ from ernie_tracker.db import (
     save_to_db,
     get_last_model_count,
     update_last_model_count,
+    get_previous_week_model_count,
     load_data_from_db,
     init_database,
 )
@@ -29,7 +30,7 @@ st.set_page_config(page_title="ERNIE模型下载数据统计", layout="wide")
 st.title("📊 ERNIE模型下载数据统计")
 
 
-def fetch_platform_data_only(platform_name, fetch_func, save_to_database=True):
+def fetch_platform_data_only(platform_name, fetch_func, save_to_database=True, shared_progress=None):
     """
     仅执行数据抓取（不包含UI操作，用于并行执行）
 
@@ -37,21 +38,26 @@ def fetch_platform_data_only(platform_name, fetch_func, save_to_database=True):
         platform_name: 平台名称
         fetch_func: 抓取函数
         save_to_database: 是否保存到数据库
+        shared_progress: 共享进度字典（用于实时更新）
 
     Returns:
         tuple: (platform_name, DataFrame, success, elapsed_time, error_message, progress_updates)
     """
-    # 获取上次记录的模型数量
+    # 获取上次记录的模型数量和上周模型数量
     last_count = get_last_model_count(platform_name)
+    week_count = get_previous_week_model_count(platform_name)
+
+    # 优先使用上周数量作为参考，其次使用上次数量
+    reference_count = week_count if week_count else last_count
 
     # 进度更新信息列表
     progress_updates = []
 
     # 保存当前参考总数（使用字典避免闭包问题）
-    ref = {"denom": last_count}
+    ref = {"denom": reference_count}
 
     def progress_callback(processed, discovered_total=None):
-        """进度回调函数（仅收集进度信息，不更新UI）"""
+        """进度回调函数（收集进度信息并更新共享状态）"""
         if ref["denom"]:  # 有参考总数
             denom = ref["denom"]
             if processed > denom:
@@ -61,28 +67,62 @@ def fetch_platform_data_only(platform_name, fetch_func, save_to_database=True):
                 denom = processed
 
             progress = min(processed / denom, 1.0)
-            progress_updates.append({
+            update_info = {
                 'processed': processed,
                 'total': denom,
                 'progress': progress,
-                'message': f"已处理 {processed} / 参考总数 {denom}"
-            })
+                'percentage': f"{progress * 100:.1f}%",
+                'message': f"已处理 {processed} / 参考总数 {denom} ({progress * 100:.1f}%)"
+            }
+            progress_updates.append(update_info)
+
+            # 更新共享进度状态
+            if shared_progress is not None:
+                shared_progress[platform_name] = {
+                    'processed': processed,
+                    'total': denom,
+                    'progress': progress,
+                    'status': 'running',
+                    'last_update': time.time()
+                }
         else:  # 首次运行
             if discovered_total:
                 progress = processed / discovered_total
-                progress_updates.append({
+                update_info = {
                     'processed': processed,
                     'total': discovered_total,
                     'progress': progress,
-                    'message': f"已处理 {processed} / 实际总数 {discovered_total}"
-                })
+                    'percentage': f"{progress * 100:.1f}%",
+                    'message': f"已处理 {processed} / 实际总数 {discovered_total} ({progress * 100:.1f}%)"
+                }
+                progress_updates.append(update_info)
+
+                if shared_progress is not None:
+                    shared_progress[platform_name] = {
+                        'processed': processed,
+                        'total': discovered_total,
+                        'progress': progress,
+                        'status': 'running',
+                        'last_update': time.time()
+                    }
             else:
-                progress_updates.append({
+                update_info = {
                     'processed': processed,
                     'total': None,
                     'progress': None,
+                    'percentage': None,
                     'message': f"已处理 {processed} （总数未知）"
-                })
+                }
+                progress_updates.append(update_info)
+
+                if shared_progress is not None:
+                    shared_progress[platform_name] = {
+                        'processed': processed,
+                        'total': None,
+                        'progress': None,
+                        'status': 'running',
+                        'last_update': time.time()
+                    }
 
     # 执行数据获取
     start_time = time.time()
@@ -104,6 +144,16 @@ def fetch_platform_data_only(platform_name, fetch_func, save_to_database=True):
             'message': status_message
         })
 
+        # 更新共享进度为完成状态
+        if shared_progress is not None:
+            shared_progress[platform_name] = {
+                'processed': total_count,
+                'total': ref["denom"],
+                'progress': 1.0,
+                'status': 'completed',
+                'last_update': time.time()
+            }
+
         return platform_name, df, True, elapsed_time, None, progress_updates
 
     except Exception as e:
@@ -112,6 +162,18 @@ def fetch_platform_data_only(platform_name, fetch_func, save_to_database=True):
             'status': 'error',
             'message': error_message
         })
+
+        # 更新共享进度为错误状态
+        if shared_progress is not None:
+            shared_progress[platform_name] = {
+                'processed': 0,
+                'total': ref["denom"],
+                'progress': 0,
+                'status': 'error',
+                'error': error_message,
+                'last_update': time.time()
+            }
+
         return platform_name, None, False, time.time() - start_time, error_message, progress_updates
 
 
@@ -132,21 +194,36 @@ def run_platform_fetcher(platform_name, fetch_func, save_to_database=True, ui_co
         # 兼容原有的独立UI模式
         st.subheader(platform_name)
 
-    # 获取上次记录的模型数量
+    # 获取上周模型数量和上次记录的模型数量
+    week_count = get_previous_week_model_count(platform_name)
     last_count = get_last_model_count(platform_name)
 
-    # 串行模式 - 原有UI显示方式
-    st.write(
-        f"上次记录的模型数量：{last_count if last_count is not None else '暂无记录（首次运行）'}"
-    )
+    # 优先使用上周数量作为参考，其次使用上次数量
+    reference_count = week_count if week_count else last_count
+
+    # 串行模式 - 增强UI显示方式
+    col1, col2 = st.columns(2)
+    with col1:
+        if week_count:
+            st.info(f"📅 上周模型数量：{week_count}")
+        if last_count:
+            st.info(f"📊 上次记录：{last_count}")
+
+    with col2:
+        if reference_count:
+            st.success(f"🎯 参考总数：{reference_count}")
+        else:
+            st.warning("⚠️ 暂无历史记录（首次运行）")
+
     status_placeholder = st.empty()
     progress_bar = st.progress(0)
+    percentage_placeholder = st.empty()
 
     # 保存当前参考总数
-    ref = {"denom": last_count}
+    ref = {"denom": reference_count}
 
     def progress_callback(processed, discovered_total=None):
-        """进度回调函数"""
+        """进度回调函数（增强版，显示百分比）"""
         if ref["denom"]:  # 有参考总数
             denom = ref["denom"]
             if processed > denom:
@@ -156,36 +233,40 @@ def run_platform_fetcher(platform_name, fetch_func, save_to_database=True, ui_co
                 denom = processed
 
             progress = min(processed / denom, 1.0)
+            percentage = f"{progress * 100:.1f}%"
             progress_bar.progress(progress)
-            status_placeholder.text(
-                f"已处理 {processed} / 参考总数 {denom}"
-            )
+            status_placeholder.text(f"已处理 {processed} / 参考总数 {denom}")
+            percentage_placeholder.success(f"📊 进度：{percentage}")
         else:  # 首次运行
             if discovered_total:
-                progress_bar.progress(processed / discovered_total)
-                status_placeholder.text(
-                    f"已处理 {processed} / 实际总数 {discovered_total}"
-                )
+                progress = processed / discovered_total
+                percentage = f"{progress * 100:.1f}%"
+                progress_bar.progress(progress)
+                status_placeholder.text(f"已处理 {processed} / 实际总数 {discovered_total}")
+                percentage_placeholder.success(f"📊 进度：{percentage}")
             else:
                 status_placeholder.text(f"已处理 {processed} （总数未知）")
+                percentage_placeholder.info("⏳ 探索中...")
 
     # 执行数据获取
     start_time = time.time()
     try:
-        df, total_count = fetch_func(progress_callback=progress_callback, progress_total=last_count)
+        df, total_count = fetch_func(progress_callback=progress_callback, progress_total=reference_count)
         elapsed_time = time.time() - start_time
 
         # 保存到数据库
         if save_to_database:
-            if total_count is not None and total_count != last_count:
+            if total_count is not None and total_count != reference_count:
                 update_last_model_count(platform_name, total_count)
             save_to_db(df, DB_PATH)
-            status_message = f"完成：共发现 {total_count} 个模型，已保存到数据库。"
+            status_message = f"✅ 完成：共发现 {total_count} 个模型，已保存到数据库。"
         else:
-            status_message = f"完成：共发现 {total_count} 个模型，仅获取数据。"
+            status_message = f"✅ 完成：共发现 {total_count} 个模型，仅获取数据。"
 
-        status_placeholder.text(status_message)
+        status_placeholder.success(status_message)
+        percentage_placeholder.success("🎉 100.0%")
         progress_bar.progress(1.0)
+        st.info(f"⏱️ 用时：{elapsed_time:.2f} 秒")
         return df
 
     except Exception as e:
@@ -195,7 +276,7 @@ def run_platform_fetcher(platform_name, fetch_func, save_to_database=True, ui_co
 
 def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
     """
-    并行运行多个平台的数据抓取（修复版：避免在线程中调用Streamlit API）
+    并行运行多个平台的数据抓取（支持实时进度更新）
 
     Args:
         platforms: 平台名称列表
@@ -212,23 +293,37 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
     st.markdown("### ⏳ 并行更新进度")
     overall_progress = st.empty()
 
+    # 创建实时日志输出区域
+    log_container = st.container()
+    log_placeholder = log_container.empty()
+
     # 为每个平台创建状态显示区域
     platform_status = {}
     for platform in platforms:
-        with st.expander(f"🔄 {platform}", expanded=True):
+        # 获取上周的模型数量作为参考
+        week_count = get_previous_week_model_count(platform)
+        reference_info = f"参考: {week_count} (上周)" if week_count else "参考: 无历史数据"
+
+        with st.expander(f"🔄 {platform} - {reference_info}", expanded=True):
             platform_status[platform] = {
                 'status': st.empty(),
                 'progress': st.progress(0),
-                'details': st.empty(),
+                'progress_text': st.empty(),
+                'log': st.empty(),
                 'time': st.empty()
             }
             platform_status[platform]['status'].info(f"🔄 {platform} 等待中...")
+            platform_status[platform]['progress_text'].info("准备启动...")
+
+    # 创建共享进度字典（线程安全）
+    manager = threading.Lock()
+    shared_progress = {}
 
     def fetch_platform_task(platform_name):
         """单个平台抓取任务（纯数据处理，不包含UI操作）"""
         fetch_func = fetchers_to_use.get(platform_name)
         if fetch_func:
-            return fetch_platform_data_only(platform_name, fetch_func, save_to_database)
+            return fetch_platform_data_only(platform_name, fetch_func, save_to_database, shared_progress)
         return platform_name, None, False, 0, "抓取函数未找到", []
 
     # 使用线程池并行执行
@@ -241,9 +336,46 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
 
         completed_count = 0
         total_count = len(platforms)
+        last_log_time = time.time()
+        all_logs = []
 
         # 实时更新各平台状态
         while completed_count < total_count:
+            # 使用锁读取共享进度
+            with manager:
+                progress_snapshot = shared_progress.copy()
+
+            # 更新每个平台的实时进度
+            for platform, progress_data in progress_snapshot.items():
+                if platform in platform_status and progress_data.get('status') == 'running':
+                    processed = progress_data.get('processed', 0)
+                    total = progress_data.get('total')
+                    progress_value = progress_data.get('progress', 0)
+
+                    # 更新进度条和文本
+                    if total:
+                        percentage = f"{progress_value * 100:.1f}%"
+                        platform_status[platform]['progress'].progress(progress_value)
+                        platform_status[platform]['progress_text'].info(
+                            f"进度: {processed}/{total} ({percentage})"
+                        )
+
+                        # 添加到日志
+                        timestamp = time.strftime("%H:%M:%S")
+                        log_entry = f"[{timestamp}] {platform}: 已处理 {processed}/{total} ({percentage})"
+                        if log_entry not in all_logs:
+                            all_logs.append(log_entry)
+                    else:
+                        platform_status[platform]['progress_text'].info(
+                            f"进度: 已处理 {processed} （总数未知）"
+                        )
+
+                        # 添加到日志
+                        timestamp = time.strftime("%H:%M:%S")
+                        log_entry = f"[{timestamp}] {platform}: 已处理 {processed} （总数未知）"
+                        if log_entry not in all_logs:
+                            all_logs.append(log_entry)
+
             # 检查已完成的任务
             for future in list(future_to_platform.keys()):
                 if future.done():
@@ -257,28 +389,54 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
                         # 更新该平台的最终状态
                         if success:
                             platform_status[platform_name]['status'].success(f"✅ {platform_name} 完成")
-                            platform_status[platform_name]['details'].success(progress_updates[-1]['message'] if progress_updates else "完成")
+                            final_msg = progress_updates[-1]['message'] if progress_updates else "完成"
+                            platform_status[platform_name]['progress_text'].success(final_msg)
                             platform_status[platform_name]['time'].success(f"⏱️ 用时: {elapsed_time:.2f} 秒")
                             platform_status[platform_name]['progress'].progress(1.0)
+
+                            # 添加完成日志
+                            timestamp = time.strftime("%H:%M:%S")
+                            all_logs.append(f"[{timestamp}] {platform_name}: ✅ {final_msg}")
 
                             if df is not None:
                                 all_dfs.append(df)
                         else:
                             platform_status[platform_name]['status'].error(f"❌ {platform_name} 失败")
-                            platform_status[platform_name]['details'].error(error_message)
+                            platform_status[platform_name]['progress_text'].error(error_message)
                             platform_status[platform_name]['time'].error(f"⏱️ 用时: {elapsed_time:.2f} 秒")
+
+                            # 添加错误日志
+                            timestamp = time.strftime("%H:%M:%S")
+                            all_logs.append(f"[{timestamp}] {platform_name}: ❌ {error_message}")
 
                     except Exception as e:
                         platform_status[platform_name]['status'].error(f"❌ {platform_name} 异常")
-                        platform_status[platform_name]['details'].error(f"执行异常: {e}")
+                        platform_status[platform_name]['progress_text'].error(f"执行异常: {e}")
+
+                        # 添加异常日志
+                        timestamp = time.strftime("%H:%M:%S")
+                        all_logs.append(f"[{timestamp}] {platform_name}: ⚠️ 异常 - {e}")
 
                     # 更新总体进度
                     overall_progress.info(f"🎯 总体进度：{completed_count}/{total_count} 个平台完成")
 
+            # 更新实时日志显示（每0.5秒）
+            if time.time() - last_log_time > 0.5:
+                # 只显示最近20条日志
+                recent_logs = all_logs[-20:] if len(all_logs) > 20 else all_logs
+                log_text = "\n".join(recent_logs)
+                with log_container:
+                    st.markdown("#### 📝 实时日志")
+                    st.code(log_text, language=None)
+                last_log_time = time.time()
+
             # 短暂休眠避免过度占用CPU
-            time.sleep(0.5)
+            time.sleep(0.2)
 
     total_elapsed_time = time.time() - total_start_time
+
+    # 清空日志容器并显示完成信息
+    log_container.empty()
 
     # AI Studio Model Tree 补充爬取（在第一轮完成后）
     if "AI Studio" in platforms and st.session_state.get('use_model_tree', True):
@@ -338,6 +496,16 @@ if page == "📥 数据更新":
     from ernie_tracker.analysis import get_available_dates
     import os
     st.markdown("## 📥 数据更新")
+
+    # 进度显示优化说明
+    st.info("""
+    🎯 **进度显示增强**：
+    - **参考基准**：使用上周模型数量作为进度参考（如无上周数据则使用上次记录）
+    - **实时百分比**：并行/串行模式均显示实时百分比进度
+    - **实时日志**：并行模式下显示各平台的实时抓取日志
+    - **自动更新**：当实际模型数超过参考数时，自动更新参考值
+    """)
+
     st.info("🚀 **优化更新模式**：现在一次更新即可获取所有PaddlePaddle模型数据（包含ERNIE-4.5和PaddleOCR-VL），无需分别选择！")
 
     # Model Tree 选项
@@ -415,9 +583,9 @@ if page == "📥 数据更新":
     use_parallel = (execution_mode == "🚀 并行执行（推荐）")
 
     if use_parallel:
-        st.info("⚡ 各平台将同时进行数据抓取，大幅提升效率")
+        st.success("⚡ **并行模式优势**：各平台同时抓取 + 实时日志输出 + 动态百分比进度")
     else:
-        st.warning("🐌 各平台将依次进行数据抓取，耗时较长")
+        st.info("🐌 **串行模式特点**：依次抓取各平台 + 详细进度显示 + 适合调试")
 
     st.markdown("---")
 

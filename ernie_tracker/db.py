@@ -128,6 +128,39 @@ def update_last_model_count(platform, count):
     conn.close()
 
 
+def get_previous_week_model_count(platform, days_ago=7):
+    """
+    获取平台上周（或指定天数前）的模型数量作为进度参考
+
+    Args:
+        platform: 平台名称
+        days_ago: 往前推算的天数，默认7天
+
+    Returns:
+        int: 该日期的模型数量，如果没有数据则返回 None
+    """
+    from datetime import timedelta
+
+    init_database()
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    # 计算目标日期
+    target_date = (date.today() - timedelta(days=days_ago)).isoformat()
+
+    # 查询该日期该平台的唯一模型数量
+    cur.execute(f"""
+        SELECT COUNT(DISTINCT model_name)
+        FROM {DATA_TABLE}
+        WHERE repo=? AND date=?
+    """, (platform, target_date))
+
+    row = cur.fetchone()
+    conn.close()
+
+    return row[0] if row and row[0] > 0 else None
+
+
 def load_data_from_db(date_filter=None, platform_filter=None, last_value_per_model=False):
     """
     从数据库中读取数据
