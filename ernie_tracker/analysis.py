@@ -259,18 +259,32 @@ def get_all_new_models(current_date, previous_date, model_series='ERNIE-4.5'):
         else:
             target_category = 'ernie-4.5'
 
-        # 筛选Hugging Face平台的指定系列模型（使用 model_category 字段）
+        # 🔴 关键修复：先按 model_category 筛选模型系列，再判断新增
+        # 新增判断只看 (repo, publisher, model_name) 三元组，不受 model_category 缺失影响
+        # 筛选策略：model_category 正确 OR model_name 包含关键词
+        if model_series == 'ERNIE-4.5':
+            name_pattern = 'ERNIE-4.5'
+        else:  # PaddleOCR-VL
+            name_pattern = 'PaddleOCR-VL'
+
+        # 使用 model_category OR model_name 筛选，确保不遗漏因 model_category 缺失的模型
         hf_current = current_data[
-            (current_data['repo'] == 'Hugging Face') &
-            (current_data['model_category'] == target_category)
+            (current_data['repo'] == 'Hugging Face') & (
+                (current_data['model_category'] == target_category) |
+                (current_data['model_name'].str.contains(name_pattern, case=False, na=False))
+            )
         ].copy()
 
         if previous_data.empty:
             hf_previous = pd.DataFrame()
         else:
+            # 🔴 关键修复：previous_date 使用相同的筛选逻辑
+            # 这样即使之前的数据 model_category 为空，也能通过 model_name 匹配识别已存在的模型
             hf_previous = previous_data[
-                (previous_data['repo'] == 'Hugging Face') &
-                (previous_data['model_category'] == target_category)
+                (previous_data['repo'] == 'Hugging Face') & (
+                    (previous_data['model_category'] == target_category) |
+                    (previous_data['model_name'].str.contains(name_pattern, case=False, na=False))
+                )
             ].copy()
 
         # 找出在当前数据中但不在对比数据中的模型（按 publisher+model_name 去重）
@@ -631,13 +645,12 @@ def calculate_weekly_report(current_date=None, previous_date=None, model_order=N
     all_previous_total = official_previous_total + derivative_previous_total
     all_growth = all_current_total - all_previous_total
     # 衍生模型（按 HF、非官方、publisher+model_name 去重的新出现数量）
+    # 🔴 修复：移除多余的日期筛选，因为 all_current_data/all_previous_data 已经只包含对应日期的数据
     hf_curr_non_official = all_current_data[
-        (all_current_data['date'] == current_date) &
         (all_current_data['repo'] == 'Hugging Face') &
         (all_current_data['is_official'] == False)
     ]
     hf_prev_non_official = all_previous_data[
-        (all_previous_data['date'] == previous_date) &
         (all_previous_data['repo'] == 'Hugging Face') &
         (all_previous_data['is_official'] == False)
     ]
