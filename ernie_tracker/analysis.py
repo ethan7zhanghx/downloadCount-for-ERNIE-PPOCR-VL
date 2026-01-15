@@ -1451,7 +1451,36 @@ def calculate_periodic_stats(current_date, selected_series=None):
             "其他ERNIE": "other-ernie"
         }
         selected_categories = [series_mapping.get(s, s) for s in selected_series]
-        return df[df['model_category'].isin(selected_categories)].copy()
+
+        # 🔴 关键修复：使用 model_category OR model_name 匹配，避免因 model_category 缺失导致假新增
+        # 为每个系列创建筛选条件
+        conditions = []
+        for category in selected_categories:
+            # 获取对应的 name_pattern
+            if category == 'ernie-4.5':
+                name_pattern = 'ERNIE-4.5'
+            elif category == 'paddleocr-vl':
+                name_pattern = 'PaddleOCR-VL'
+            elif category == 'other-ernie':
+                name_pattern = 'ERNIE'  # 宽泛匹配
+            else:
+                name_pattern = category
+
+            # model_category 匹配 OR model_name 包含关键词
+            condition = (
+                (df['model_category'] == category) |
+                (df['model_name'].str.contains(name_pattern, case=False, na=False))
+            )
+            conditions.append(condition)
+
+        # 合并所有条件（OR 关系）
+        if conditions:
+            combined_condition = conditions[0]
+            for condition in conditions[1:]:
+                combined_condition = combined_condition | condition
+            return df[combined_condition].copy()
+        else:
+            return df.copy()
 
     current_data = filter_series(current_data)
     last_week_data = filter_series(last_week_data)
