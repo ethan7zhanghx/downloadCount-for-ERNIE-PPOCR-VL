@@ -29,7 +29,7 @@ st.set_page_config(page_title="ERNIE模型下载数据统计", layout="wide")
 st.title("📊 ERNIE模型下载数据统计")
 
 
-def fetch_platform_data_only(platform_name, fetch_func, save_to_database=True):
+def fetch_platform_data_only(platform_name, fetch_func, save_to_database=True, log_callback=None, progress_update_callback=None):
     """
     仅执行数据抓取（不包含UI操作，用于并行执行）
 
@@ -37,6 +37,8 @@ def fetch_platform_data_only(platform_name, fetch_func, save_to_database=True):
         platform_name: 平台名称
         fetch_func: 抓取函数
         save_to_database: 是否保存到数据库
+        log_callback: 日志回调函数（用于实时输出日志）
+        progress_update_callback: 进度更新回调函数（用于实时更新进度条）
 
     Returns:
         tuple: (platform_name, DataFrame, success, elapsed_time, error_message, progress_updates)
@@ -51,7 +53,7 @@ def fetch_platform_data_only(platform_name, fetch_func, save_to_database=True):
     ref = {"denom": last_count}
 
     def progress_callback(processed, discovered_total=None):
-        """进度回调函数（仅收集进度信息，不更新UI）"""
+        """进度回调函数（收集进度信息并输出日志）"""
         if ref["denom"]:  # 有参考总数
             denom = ref["denom"]
             if processed > denom:
@@ -61,28 +63,50 @@ def fetch_platform_data_only(platform_name, fetch_func, save_to_database=True):
                 denom = processed
 
             progress = min(processed / denom, 1.0)
-            progress_updates.append({
+            message = f"已处理 {processed} / 参考总数 {denom}"
+            progress_data = {
                 'processed': processed,
                 'total': denom,
                 'progress': progress,
-                'message': f"已处理 {processed} / 参考总数 {denom}"
-            })
+                'message': message
+            }
+            progress_updates.append(progress_data)
+
+            # 实时输出日志
+            if log_callback:
+                log_callback(f"[{platform_name}] {message}")
+
+            # 实时更新进度条
+            if progress_update_callback:
+                progress_update_callback(progress_data)
         else:  # 首次运行
             if discovered_total:
                 progress = processed / discovered_total
-                progress_updates.append({
+                message = f"已处理 {processed} / 实际总数 {discovered_total}"
+                progress_data = {
                     'processed': processed,
                     'total': discovered_total,
                     'progress': progress,
-                    'message': f"已处理 {processed} / 实际总数 {discovered_total}"
-                })
+                    'message': message
+                }
+                progress_updates.append(progress_data)
             else:
-                progress_updates.append({
+                message = f"已处理 {processed} （总数未知）"
+                progress_data = {
                     'processed': processed,
                     'total': None,
                     'progress': None,
-                    'message': f"已处理 {processed} （总数未知）"
-                })
+                    'message': message
+                }
+                progress_updates.append(progress_data)
+
+            # 实时输出日志
+            if log_callback:
+                log_callback(f"[{platform_name}] {message}")
+
+            # 实时更新进度条
+            if progress_update_callback:
+                progress_update_callback(progress_data)
 
     # 执行数据获取
     start_time = time.time()
@@ -195,7 +219,7 @@ def run_platform_fetcher(platform_name, fetch_func, save_to_database=True, ui_co
 
 def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
     """
-    并行运行多个平台的数据抓取（修复版：避免在线程中调用Streamlit API）
+    并行运行多个平台的数据抓取（修复版：实时进度显示）
 
     Args:
         platforms: 平台名称列表
@@ -208,27 +232,63 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
     all_dfs = []
     total_start_time = time.time()
 
-    # 创建UI容器
+    # 创建UI容器 - 使用st.status来显示实时进度
     st.markdown("### ⏳ 并行更新进度")
-    overall_progress = st.empty()
 
-    # 为每个平台创建状态显示区域
-    platform_status = {}
+    # 日志列表（线程安全）
+    log_messages = []
+    log_lock = threading.Lock()
+
+    # 共享的进度状态（线程安全）
+    progress_state = {}
     for platform in platforms:
-        with st.expander(f"🔄 {platform}", expanded=True):
-            platform_status[platform] = {
-                'status': st.empty(),
-                'progress': st.progress(0),
-                'details': st.empty(),
-                'time': st.empty()
-            }
-            platform_status[platform]['status'].info(f"🔄 {platform} 等待中...")
+        progress_state[platform] = {
+            'latest_update': None,
+            'lock': threading.Lock()
+        }
+
+    def add_log(message):
+        """线程安全的日志添加函数"""
+        with log_lock:
+            log_messages.append(f"[{time.strftime('%H:%M:%S')}] {message}")
+
+    def update_progress(platform_name, progress_data):
+        """线程安全的进度更新函数"""
+        with progress_state[platform_name]['lock']:
+            progress_state[platform_name]['latest_update'] = progress_data
+
+    # 创建一个占位容器用于显示所有平台的状态
+    status_container = st.container()
+
+    with status_container:
+        # 为每个平台创建状态显示区域
+        platform_status = {}
+        for platform in platforms:
+            with st.expander(f"🔄 {platform}", expanded=True):
+                platform_status[platform] = {
+                    'status': st.empty(),
+                    'progress': st.progress(0),
+                    'details': st.empty(),
+                    'time': st.empty()
+                }
+                platform_status[platform]['status'].info(f"🔄 {platform} 等待中...")
+
+        # 添加日志输出区域
+        st.markdown("---")
+        st.markdown("#### 📝 实时日志")
+        log_placeholder = st.empty()
 
     def fetch_platform_task(platform_name):
         """单个平台抓取任务（纯数据处理，不包含UI操作）"""
         fetch_func = fetchers_to_use.get(platform_name)
         if fetch_func:
-            return fetch_platform_data_only(platform_name, fetch_func, save_to_database)
+            return fetch_platform_data_only(
+                platform_name,
+                fetch_func,
+                save_to_database,
+                log_callback=add_log,
+                progress_update_callback=lambda data: update_progress(platform_name, data)
+            )
         return platform_name, None, False, 0, "抓取函数未找到", []
 
     # 使用线程池并行执行
@@ -242,8 +302,26 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
         completed_count = 0
         total_count = len(platforms)
 
+        # 总体进度显示
+        overall_placeholder = st.empty()
+
         # 实时更新各平台状态
         while completed_count < total_count:
+            # 先检查并更新所有平台的进度（包括未完成的）
+            for platform in platforms:
+                with progress_state[platform]['lock']:
+                    latest = progress_state[platform]['latest_update']
+                    if latest and 'progress' in latest:
+                        try:
+                            # 更新进度条
+                            platform_status[platform]['progress'].progress(latest['progress'])
+                            # 更新详细信息
+                            if latest['message']:
+                                platform_status[platform]['details'].info(latest['message'])
+                        except Exception as e:
+                            # 忽略UI更新错误，避免中断流程
+                            pass
+
             # 检查已完成的任务
             for future in list(future_to_platform.keys()):
                 if future.done():
@@ -257,7 +335,8 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
                         # 更新该平台的最终状态
                         if success:
                             platform_status[platform_name]['status'].success(f"✅ {platform_name} 完成")
-                            platform_status[platform_name]['details'].success(progress_updates[-1]['message'] if progress_updates else "完成")
+                            final_message = progress_updates[-1]['message'] if progress_updates else "完成"
+                            platform_status[platform_name]['details'].success(final_message)
                             platform_status[platform_name]['time'].success(f"⏱️ 用时: {elapsed_time:.2f} 秒")
                             platform_status[platform_name]['progress'].progress(1.0)
 
@@ -273,7 +352,15 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
                         platform_status[platform_name]['details'].error(f"执行异常: {e}")
 
                     # 更新总体进度
-                    overall_progress.info(f"🎯 总体进度：{completed_count}/{total_count} 个平台完成")
+                    overall_placeholder.info(f"🎯 总体进度：{completed_count}/{total_count} 个平台完成")
+
+            # 更新日志显示（显示最新的20条）
+            with log_lock:
+                if log_messages:
+                    display_logs = log_messages[-20:] if len(log_messages) > 20 else log_messages
+                    log_text = "\n".join(display_logs)
+                    # 使用text而不是text_area，避免闪烁
+                    log_placeholder.text(log_text)
 
             # 短暂休眠避免过度占用CPU
             time.sleep(0.5)
