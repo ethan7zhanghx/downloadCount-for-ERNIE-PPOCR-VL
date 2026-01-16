@@ -239,6 +239,39 @@ def fetch_modelscope_data_unified(progress_callback=None, progress_total=None):
                 except:
                     last_modified = None
 
+            # 🔧 新增：提取模型分类信息
+            # 1. BaseModel (base_model)
+            base_model = None
+            if "BaseModel" in info and info["BaseModel"]:
+                if isinstance(info["BaseModel"], list) and len(info["BaseModel"]) > 0:
+                    base_model = info["BaseModel"][0]
+                elif isinstance(info["BaseModel"], str):
+                    base_model = info["BaseModel"]
+
+            # 2. BaseModelRelation (model_type)
+            model_type = None
+            if "BaseModelRelation" in info and info["BaseModelRelation"]:
+                model_type = info["BaseModelRelation"].lower()
+                # 映射到标准类型名称
+                type_mapping = {
+                    'finetune': 'finetune',
+                    'quantized': 'quantized',
+                    'adapter': 'adapter',
+                    'lora': 'lora',
+                    'merge': 'merge'
+                }
+                if model_type not in type_mapping:
+                    model_type = 'other' if model_type else None
+            else:
+                # 如果没有 BaseModelRelation，但也没有 base_model，则可能是 original
+                if not base_model:
+                    model_type = 'original'
+
+            # 3. model_category - 使用 classify_model 函数根据名称、发布者和 base_model 推断
+            publisher = model_id.split("/")[0] if "/" in model_id else 'Unknown'
+            model_name = model_id.split("/", 1)[1] if "/" in model_id else model_id
+            model_category = classify_model(model_name, publisher, base_model)
+
             records.append({
                 "date": today,
                 "repo": "ModelScope",
@@ -248,7 +281,11 @@ def fetch_modelscope_data_unified(progress_callback=None, progress_total=None):
                 "search_keyword": search_keyword,
                 "created_at": created_at,
                 "last_modified": last_modified,
-                "url": f"https://modelscope.cn/models/{model_id}"  # 模型详情页URL
+                "url": f"https://modelscope.cn/models/{model_id}",  # 模型详情页URL
+                "model_category": model_category,
+                "model_type": model_type,
+                "base_model": base_model,
+                "base_model_from_api": base_model
             })
         except Exception as e:
             print(f"获取 {model_id} 失败: {e}")
@@ -258,7 +295,9 @@ def fetch_modelscope_data_unified(progress_callback=None, progress_total=None):
 
     df = pd.DataFrame(
         records,
-        columns=["date", "repo", "model_name", "publisher", "download_count", "search_keyword", "created_at", "last_modified", "url"]
+        columns=["date", "repo", "model_name", "publisher", "download_count", "search_keyword",
+                 "created_at", "last_modified", "url", "model_category", "model_type", "base_model",
+                 "base_model_from_api"]
     )
     df['download_count'] = pd.to_numeric(df['download_count'], errors='coerce').fillna(0).astype(int)
     return df, total_count
