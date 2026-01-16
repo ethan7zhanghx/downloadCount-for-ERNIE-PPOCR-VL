@@ -8,6 +8,8 @@ import time
 from datetime import date
 import concurrent.futures
 import threading
+from enum import Enum
+import re
 
 from ernie_tracker.config import DB_PATH, PLATFORM_NAMES
 from ernie_tracker.db import (
@@ -23,6 +25,180 @@ from ernie_tracker.fetchers.fetchers_unified import (
     fetch_hugging_face_data_unified,
 )
 import sqlite3
+
+
+# =============================================================================
+# 日志系统（美化版）
+# =============================================================================
+
+class LogLevel(Enum):
+    """日志级别枚举"""
+    INFO = "INFO"
+    SUCCESS = "SUCCESS"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    DEBUG = "DEBUG"
+
+
+class LogEntry:
+    """日志条目类"""
+    def __init__(self, level: LogLevel, message: str, platform: str = None, timestamp: str = None):
+        self.level = level
+        self.message = message
+        self.platform = platform
+        self.timestamp = timestamp or time.strftime('%H:%M:%S')
+
+    def to_html(self) -> str:
+        """转换为HTML格式（带样式）"""
+        # 根据级别选择颜色和图标
+        level_styles = {
+            LogLevel.INFO: {
+                'icon': 'ℹ️',
+                'color': '#3498db',
+                'bg_color': '#ebf5fb'
+            },
+            LogLevel.SUCCESS: {
+                'icon': '✅',
+                'color': '#27ae60',
+                'bg_color': '#e8f8f5'
+            },
+            LogLevel.WARNING: {
+                'icon': '⚠️',
+                'color': '#f39c12',
+                'bg_color': '#fef5e7'
+            },
+            LogLevel.ERROR: {
+                'icon': '❌',
+                'color': '#e74c3c',
+                'bg_color': '#fdedec'
+            },
+            LogLevel.DEBUG: {
+                'icon': '🔍',
+                'color': '#95a5a6',
+                'bg_color': '#f4f6f7'
+            }
+        }
+
+        style = level_styles[self.level]
+
+        # 平台标签
+        platform_tag = f'<span style="background: #667eea; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.85em; margin-left: 8px;">{self.platform}</span>' if self.platform else ''
+
+        # 构建HTML
+        html = f'''
+        <div style="
+            padding: 8px 12px;
+            margin: 4px 0;
+            background: {style['bg_color']};
+            border-left: 4px solid {style['color']};
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        ">
+            <span style="color: #7f8c8d; margin-right: 8px;">[{self.timestamp}]</span>
+            <span style="color: {style['color']}; font-weight: bold; margin-right: 8px;">{style['icon']}</span>
+            <span style="color: #2c3e50;">{self.message}</span>
+            {platform_tag}
+        </div>
+        '''
+        return html
+
+    def to_text(self) -> str:
+        """转换为纯文本格式"""
+        platform_str = f"[{self.platform}] " if self.platform else ""
+        return f"[{self.timestamp}] {self.level.value} {platform_str}{self.message}"
+
+
+class Logger:
+    """日志管理器（线程安全）"""
+    def __init__(self, max_logs: int = 100):
+        self.logs = []
+        self.max_logs = max_logs
+        self.lock = threading.Lock()
+
+        # 统计信息
+        self.stats = {
+            LogLevel.INFO: 0,
+            LogLevel.SUCCESS: 0,
+            LogLevel.WARNING: 0,
+            LogLevel.ERROR: 0,
+            LogLevel.DEBUG: 0
+        }
+
+    def log(self, level: LogLevel, message: str, platform: str = None):
+        """添加日志"""
+        with self.lock:
+            entry = LogEntry(level, message, platform)
+            self.logs.append(entry)
+            self.stats[level] += 1
+
+            # 保留最近的日志
+            if len(self.logs) > self.max_logs:
+                removed = self.logs.pop(0)
+                self.stats[removed.level] -= 1
+
+    def info(self, message: str, platform: str = None):
+        """记录信息日志"""
+        self.log(LogLevel.INFO, message, platform)
+
+    def success(self, message: str, platform: str = None):
+        """记录成功日志"""
+        self.log(LogLevel.SUCCESS, message, platform)
+
+    def warning(self, message: str, platform: str = None):
+        """记录警告日志"""
+        self.log(LogLevel.WARNING, message, platform)
+
+    def error(self, message: str, platform: str = None):
+        """记录错误日志"""
+        self.log(LogLevel.ERROR, message, platform)
+
+    def debug(self, message: str, platform: str = None):
+        """记录调试日志"""
+        self.log(LogLevel.DEBUG, message, platform)
+
+    def get_logs(self, level: LogLevel = None, limit: int = None) -> list:
+        """获取日志"""
+        with self.lock:
+            if level:
+                filtered = [log for log in self.logs if log.level == level]
+            else:
+                filtered = self.logs.copy()
+
+            if limit:
+                return filtered[-limit:]
+            return filtered
+
+    def get_stats(self) -> dict:
+        """获取统计信息"""
+        with self.lock:
+            return {
+                'total': len(self.logs),
+                'info': self.stats[LogLevel.INFO],
+                'success': self.stats[LogLevel.SUCCESS],
+                'warning': self.stats[LogLevel.WARNING],
+                'error': self.stats[LogLevel.ERROR],
+                'debug': self.stats[LogLevel.DEBUG]
+            }
+
+    def clear(self):
+        """清空日志"""
+        with self.lock:
+            self.logs.clear()
+            for level in self.stats:
+                self.stats[level] = 0
+
+    def render_html(self, level: LogLevel = None, limit: int = 50) -> str:
+        """渲染为HTML"""
+        logs = self.get_logs(level, limit)
+        if not logs:
+            return '<div style="padding: 20px; text-align: center; color: #95a5a6;">暂无日志</div>'
+
+        html_parts = []
+        for entry in logs:
+            html_parts.append(entry.to_html())
+
+        return ''.join(html_parts)
 
 
 # =============================================================================
@@ -346,9 +522,8 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
     # 创建UI容器 - 使用st.status来显示实时进度
     st.markdown("### ⏳ 并行更新进度")
 
-    # 日志列表（线程安全）
-    log_messages = []
-    log_lock = threading.Lock()
+    # 创建美化的日志系统
+    logger = Logger(max_logs=200)
 
     # 共享的进度状态（线程安全）
     progress_state = {}
@@ -358,10 +533,22 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
             'lock': threading.Lock()
         }
 
-    def add_log(message):
-        """线程安全的日志添加函数"""
-        with log_lock:
-            log_messages.append(f"[{time.strftime('%H:%M:%S')}] {message}")
+    def log_callback_wrapper(message):
+        """日志回调函数包装器（解析日志级别）"""
+        # 解析日志级别
+        level = LogLevel.INFO
+        if message.startswith("✅") or "完成" in message or "成功" in message:
+            level = LogLevel.SUCCESS
+        elif message.startswith("❌") or "失败" in message or "错误" in message:
+            level = LogLevel.ERROR
+        elif message.startswith("⚠️") or "警告" in message:
+            level = LogLevel.WARNING
+
+        # 提取平台名称
+        platform_match = re.match(r'\[(.*?)\]', message)
+        platform = platform_match.group(1) if platform_match else None
+
+        logger.log(level, message, platform)
 
     def update_progress(platform_name, progress_data):
         """线程安全的进度更新函数"""
@@ -384,9 +571,24 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
                 }
                 platform_status[platform]['status'].info(f"🔄 {platform} 等待中...")
 
-        # 添加日志输出区域
+        # 添加美化后的日志输出区域
         st.markdown("---")
+
+        # 日志控制栏
+        log_control_col1, log_control_col2, log_control_col3 = st.columns([1, 1, 2])
+
+        with log_control_col1:
+            show_logs = st.checkbox("显示日志", value=True)
+
+        with log_control_col2:
+            log_level_filter = st.selectbox(
+                "日志级别",
+                ["全部", "INFO", "SUCCESS", "WARNING", "ERROR"],
+                index=0
+            )
+
         st.markdown("#### 📝 实时日志")
+        log_stats_placeholder = st.empty()
         log_placeholder = st.empty()
 
     def fetch_platform_task(platform_name):
@@ -398,13 +600,14 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
                     platform_name,
                     fetch_func,
                     save_to_database,
-                    log_callback=add_log,
+                    log_callback=log_callback_wrapper,
                     progress_update_callback=lambda data: update_progress(platform_name, data)
                 )
             return platform_name, None, False, 0, "抓取函数未找到", []
         except Exception as e:
             import traceback
             error_msg = f"任务执行异常: {str(e)}\n{traceback.format_exc()}"
+            log_callback_wrapper(f"❌ [{platform_name}] {error_msg}")
             return platform_name, None, False, 0, error_msg, []
 
     # 使用线程池并行执行
@@ -470,13 +673,33 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
                     # 更新总体进度
                     overall_placeholder.info(f"🎯 总体进度：{completed_count}/{total_count} 个平台完成")
 
-            # 更新日志显示（显示最新的20条）
-            with log_lock:
-                if log_messages:
-                    display_logs = log_messages[-20:] if len(log_messages) > 20 else log_messages
-                    log_text = "\n".join(display_logs)
-                    # 使用text而不是text_area，避免闪烁
-                    log_placeholder.text(log_text)
+            # 更新美化后的日志显示
+            if show_logs:
+                # 显示日志统计
+                stats = logger.get_stats()
+                stats_html = f"""
+                <div style="padding: 10px; background: #f8f9fa; border-radius: 8px; margin-bottom: 10px;">
+                    <strong>日志统计：</strong>
+                    <span style="color: #3498db;">总计 {stats['total']}</span> |
+                    <span style="color: #3498db;">ℹ️ INFO {stats['info']}</span> |
+                    <span style="color: #27ae60;">✅ SUCCESS {stats['success']}</span> |
+                    <span style="color: #f39c12;">⚠️ WARNING {stats['warning']}</span> |
+                    <span style="color: #e74c3c;">❌ ERROR {stats['error']}</span>
+                </div>
+                """
+                log_stats_placeholder.markdown(stats_html, unsafe_allow_html=True)
+
+                # 根据筛选条件渲染日志
+                level_map = {
+                    "INFO": LogLevel.INFO,
+                    "SUCCESS": LogLevel.SUCCESS,
+                    "WARNING": LogLevel.WARNING,
+                    "ERROR": LogLevel.ERROR
+                }
+                filter_level = level_map.get(log_level_filter) if log_level_filter != "全部" else None
+
+                logs_html = logger.render_html(level=filter_level, limit=100)
+                log_placeholder.markdown(logs_html, unsafe_allow_html=True)
 
             # 短暂休眠避免过度占用CPU
             time.sleep(0.5)
@@ -489,6 +712,7 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
     # AI Studio Model Tree
     if "AI Studio" in platforms:
         overall_placeholder.info(f"🎯 阶段1完成！用时：{total_elapsed_time:.2f} 秒")
+        logger.info(f"开始 AI Studio Model Tree 补充爬取", "AI Studio")
 
         from ernie_tracker.fetchers.fetchers_modeltree import fetch_aistudio_model_tree
 
@@ -505,9 +729,13 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
         model_tree_elapsed += elapsed
         if df is not None and not df.empty:
             all_dfs.append(df)
+            logger.success(f"AI Studio Model Tree 完成，获取 {count} 个模型，用时 {elapsed:.2f} 秒", "AI Studio")
+        else:
+            logger.info(f"AI Studio Model Tree 未发现新模型，用时 {elapsed:.2f} 秒", "AI Studio")
 
     # ModelScope Model Tree
     if "ModelScope" in platforms:
+        logger.info(f"开始 ModelScope Model Tree 补充爬取", "ModelScope")
         from ernie_tracker.fetchers.fetchers_modeltree import update_modelscope_model_tree
 
         df, count, elapsed = run_model_tree_with_progress(
@@ -523,6 +751,9 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
         model_tree_elapsed += elapsed
         if df is not None and not df.empty:
             all_dfs.append(df)
+            logger.success(f"ModelScope Model Tree 完成，获取 {count} 个模型，用时 {elapsed:.2f} 秒", "ModelScope")
+        else:
+            logger.info(f"ModelScope Model Tree 未发现新模型，用时 {elapsed:.2f} 秒", "ModelScope")
 
     # ========== 最终总结 ==========
     final_elapsed_time = time.time() - total_start_time
@@ -532,8 +763,28 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
             f"🎯 全部完成！总用时：{final_elapsed_time:.2f} 秒"
             f"（阶段1: {total_elapsed_time:.2f}秒，Model Tree: {model_tree_elapsed:.2f}秒）"
         )
+        logger.success(f"全部完成！总用时：{final_elapsed_time:.2f} 秒", None)
     else:
         overall_placeholder.success(f"🎯 并行抓取完成！总用时：{total_elapsed_time:.2f} 秒")
+        logger.success(f"并行抓取完成！总用时：{total_elapsed_time:.2f} 秒", None)
+
+    # 显示最终日志统计
+    if show_logs:
+        final_stats = logger.get_stats()
+        st.markdown("---")
+        st.markdown("### 📊 日志统计摘要")
+
+        stat_col1, stat_col2, stat_col3, stat_col4, stat_col5 = st.columns(5)
+        with stat_col1:
+            st.metric("总日志数", final_stats['total'])
+        with stat_col2:
+            st.metric("INFO", final_stats['info'], delta_color="normal")
+        with stat_col3:
+            st.metric("SUCCESS", final_stats['success'], delta_color="normal")
+        with stat_col4:
+            st.metric("WARNING", final_stats['warning'])
+        with stat_col5:
+            st.metric("ERROR", final_stats['error'])
 
     return all_dfs, total_elapsed_time
 
