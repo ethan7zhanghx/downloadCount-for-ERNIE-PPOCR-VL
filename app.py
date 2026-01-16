@@ -2332,11 +2332,29 @@ elif page == "🌳 衍生模型生态":
                                         weekly_display_cols.append('model_category')
                                     if 'model_type' in weekly_new_df.columns:
                                         weekly_display_cols.append('model_type')
+                                    if 'base_model' in weekly_new_df.columns:
+                                        weekly_display_cols.append('base_model')
+                                    if 'url' in weekly_new_df.columns:
+                                        weekly_display_cols.append('url')
 
                                     # 确保所有列都存在
                                     weekly_display_cols = [col for col in weekly_display_cols if col in weekly_new_df.columns]
 
-                                    st.dataframe(weekly_new_df[weekly_display_cols], use_container_width=True, height=300)
+                                    # 重命名列以便更好地显示
+                                    rename_dict = {
+                                        'model_name': '模型名称',
+                                        'publisher': '发布者',
+                                        'repo': '平台',
+                                        'download_count': '下载量',
+                                        'model_category': '模型系列',
+                                        'model_type': '模型类型',
+                                        'base_model': 'Base Model',
+                                        'url': '模型URL'
+                                    }
+                                    display_df = weekly_new_df[weekly_display_cols].copy()
+                                    display_df = display_df.rename(columns=rename_dict)
+
+                                    st.dataframe(display_df, use_container_width=True, height=300)
                             else:
                                 st.info("✅ 本周暂无新增衍生模型")
 
