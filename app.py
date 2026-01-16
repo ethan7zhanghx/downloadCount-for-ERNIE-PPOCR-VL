@@ -374,8 +374,8 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
 
     # AI Studio Model Tree 补充爬取（在第一轮完成后）
     if "AI Studio" in platforms and st.session_state.get('use_model_tree', True):
-        overall_progress.info(f"🎯 平台爬取完成！总用时：{total_elapsed_time:.2f} 秒")
-        overall_progress.info("🌳 正在补充 AI Studio Model Tree（衍生模型）...")
+        overall_placeholder.info(f"🎯 平台爬取完成！总用时：{total_elapsed_time:.2f} 秒")
+        overall_placeholder.info("🌳 正在补充 AI Studio Model Tree（衍生模型）...")
 
         try:
             from ernie_tracker.fetchers.fetchers_modeltree import update_aistudio_model_tree
@@ -390,19 +390,19 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
 
             if model_tree_count > 0:
                 all_dfs.append(model_tree_df)
-                overall_progress.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒（含Model Tree）")
-                overall_progress.success(f"✅ AI Studio Model Tree 完成：获取 {model_tree_count} 个衍生模型")
+                overall_placeholder.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒（含Model Tree）")
+                overall_placeholder.success(f"✅ AI Studio Model Tree 完成：获取 {model_tree_count} 个衍生模型")
             else:
-                overall_progress.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒（含Model Tree）")
-                overall_progress.info("ℹ️  AI Studio Model Tree：没有找到新的衍生模型")
+                overall_placeholder.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒（含Model Tree）")
+                overall_placeholder.info("ℹ️  AI Studio Model Tree：没有找到新的衍生模型")
 
         except Exception as e:
             final_elapsed_time = time.time() - total_start_time
-            overall_progress.warning(f"⚠️  AI Studio Model Tree 失败（不影响主流程）：{e}")
-            overall_progress.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒")
+            overall_placeholder.warning(f"⚠️  AI Studio Model Tree 失败（不影响主流程）：{e}")
+            overall_placeholder.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒")
     else:
         # 没有AI Studio或未启用Model Tree
-        overall_progress.success(f"🎯 并行抓取完成！总用时：{total_elapsed_time:.2f} 秒")
+        overall_placeholder.success(f"🎯 并行抓取完成！总用时：{total_elapsed_time:.2f} 秒")
 
     return all_dfs, total_elapsed_time
 
