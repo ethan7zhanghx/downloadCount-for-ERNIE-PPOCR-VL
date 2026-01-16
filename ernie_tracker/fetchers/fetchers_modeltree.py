@@ -589,7 +589,8 @@ def get_all_ernie_derivatives(include_paddleocr: bool = True) -> Tuple[pd.DataFr
             'created_at': detail.get('created_at'),
             'last_modified': detail.get('last_modified'),
             'fetched_at': date.today().isoformat(),
-            'base_model_from_api': detail.get('base_model_from_api')
+            'base_model_from_api': detail.get('base_model_from_api'),
+            'url': f"https://huggingface.co/{model_id}"  # 模型详情页URL
         }
         all_models.append(record)
         processed_ids.add(model_id)
