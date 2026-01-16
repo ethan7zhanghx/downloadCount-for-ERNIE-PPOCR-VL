@@ -516,6 +516,9 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
     Returns:
         tuple: (DataFrame列表, 总用时)
     """
+    # 支持Model Tree的平台列表
+    model_tree_platforms = {"AI Studio", "ModelScope"}
+
     all_dfs = []
     total_start_time = time.time()
 
@@ -676,8 +679,6 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
             return platform_name, None, False, 0, error_msg, []
 
     # 使用线程池并行执行
-    # 支持Model Tree的平台列表
-    model_tree_platforms = {"AI Studio", "ModelScope"}
     platforms_with_model_tree = [p for p in platforms if p in model_tree_platforms]
     platforms_without_model_tree = [p for p in platforms if p not in model_tree_platforms]
 
