@@ -1948,7 +1948,9 @@ def fetch_aistudio_model_tree(
     获取AI Studio官方模型的Model Tree（衍生模型）
 
     Args:
-        progress_callback: 进度回调函数
+        progress_callback: 进度回调函数，支持两种调用方式：
+                          - progress_callback(processed_count) - 更新进度
+                          - progress_callback(message) - 记录日志消息
         include_official_publishers: 官方发布者列表（默认使用标准列表）
         test_mode: 测试模式，只处理第一个模型
         save_to_db: 是否保存到数据库
@@ -1956,6 +1958,17 @@ def fetch_aistudio_model_tree(
     Returns:
         tuple: (DataFrame, total_count) 衍生模型数据和数量
     """
+
+    def log(message):
+        """记录日志，通过progress_callback传递给前端"""
+        print(message)  # 保留控制台输出
+        if progress_callback:
+            # 尝试作为日志消息调用
+            try:
+                progress_callback(message)
+            except:
+                # 如果调用失败，说明callback可能只接受int参数（进度更新）
+                pass
     from ..utils import create_chrome_driver
     from ..config import SELENIUM_TIMEOUT, DB_PATH
     from ..fetchers.selenium import AIStudioFetcher
@@ -1967,9 +1980,9 @@ def fetch_aistudio_model_tree(
     import re
     import sqlite3
 
-    print("\n" + "=" * 80)
-    print("🌳 开始获取 AI Studio Model Tree")
-    print("=" * 80)
+    log("\n" + "=" * 80)
+    log("🌳 开始获取 AI Studio Model Tree")
+    log("=" * 80)
 
     # 获取已存在的模型集合（用于跳过URL获取）
     existing_models_with_url = set()
@@ -1988,22 +2001,22 @@ def fetch_aistudio_model_tree(
                 f"{row['publisher']}/{row['model_name']}"
                 for _, row in existing_df.iterrows()
             )
-            print(f"📚 数据库中已有 {len(existing_models_with_url)} 个模型带URL")
-            print(f"⚡ 这些模型在列表页将跳过URL获取")
+            log(f"📚 数据库中已有 {len(existing_models_with_url)} 个模型带URL")
+            log(f"⚡ 这些模型在列表页将跳过URL获取")
     except Exception as e:
-        print(f"⚠️  无法加载已存在模型列表: {e}")
-        print(f"🔄 将为所有模型获取URL")
+        log(f"⚠️  无法加载已存在模型列表: {e}")
+        log(f"🔄 将为所有模型获取URL")
 
     # 获取官方模型列表
     official_models_df = get_aistudio_official_models()
     if official_models_df is None or official_models_df.empty:
-        print("❌ 没有找到AI Studio官方模型")
+        log("❌ 没有找到AI Studio官方模型")
         return pd.DataFrame(), 0
 
     # 测试模式：只处理第一个模型
     if test_mode:
         official_models_df = official_models_df.head(1)
-        print(f"🧪 测试模式：只处理第一个模型")
+        log(f"🧪 测试模式：只处理第一个模型")
 
     # 创建AIStudioFetcher实例以复用_get_detailed_info方法
     fetcher = AIStudioFetcher(test_mode=test_mode, enable_detailed_log=False)
@@ -2021,12 +2034,9 @@ def fetch_aistudio_model_tree(
             base_model_name = row['model_name']
             base_url = row['url']
 
-            print(f"\n{'=' * 80}")
-            print(f"[{idx + 1}/{total_count}] 处理模型: {base_model_name}")
-            print(f"{'=' * 80}")
-
-            # 步骤1：获取衍生类型列表
-            print(f"访问: {base_url}")
+            log(f"\n{'=' * 80}")
+            log(f"[{idx + 1}/{total_count}] 处理模型: {base_model_name}")
+            log(f"访问: {base_url}")
             driver.get(base_url)
 
             try:
@@ -2048,7 +2058,7 @@ def fetch_aistudio_model_tree(
                             close_buttons = driver.find_elements(By.CSS_SELECTOR, selector)
                             if close_buttons:
                                 close_buttons[0].click()
-                                print(f"  ✅ 已关闭横幅广告")
+                                log(f"  ✅ 已关闭横幅广告")
                                 time.sleep(0.5)
                                 break
                         except:
@@ -2070,7 +2080,7 @@ def fetch_aistudio_model_tree(
                     pass
 
             except TimeoutException:
-                print(f"⚠️  页面加载超时，跳过")
+                log(f"⚠️  页面加载超时，跳过")
                 continue
 
             # 查找模型血缘树元素
@@ -2081,10 +2091,10 @@ def fetch_aistudio_model_tree(
                 )
 
                 if not tree_items:
-                    print(f"  ⚪️  没有找到衍生类型")
+                    log(f"  ⚪️  没有找到衍生类型")
                     continue
 
-                print(f"  ✅ 找到 {len(tree_items)} 个衍生类型")
+                log(f"  ✅ 找到 {len(tree_items)} 个衍生类型")
 
                 # 步骤2：先收集所有衍生类型的信息（避免stale element reference）
                 tree_type_list = []
@@ -2098,9 +2108,9 @@ def fetch_aistudio_model_tree(
                                 try:
                                     skip_name_zh = tree_item.find_element(By.CSS_SELECTOR, "div.name-zh").text.strip()
                                     skip_name_en = tree_item.find_element(By.CSS_SELECTOR, "div.name-en").text.strip()
-                                    print(f"  ⏭️  跳过 '{skip_name_zh} / {skip_name_en}'（当前模型本身是衍生版本）")
+                                    log(f"  ⏭️  跳过 '{skip_name_zh} / {skip_name_en}'（当前模型本身是衍生版本）")
                                 except:
-                                    print(f"  ⏭️  跳过一个衍生类型（当前模型本身是衍生版本）")
+                                    log(f"  ⏭️  跳过一个衍生类型（当前模型本身是衍生版本）")
                                 continue
                         except:
                             pass
@@ -2135,7 +2145,7 @@ def fetch_aistudio_model_tree(
                             'link': link
                         })
                     except Exception as e:
-                        print(f"  ⚠️  提取衍生类型信息时出错: {e}")
+                        log(f"  ⚠️  提取衍生类型信息时出错: {e}")
                         continue
 
                 # 步骤3：对每个衍生类型获取模型列表
@@ -2146,7 +2156,7 @@ def fetch_aistudio_model_tree(
                         count = tree_type['count']
                         link = tree_type['link']
 
-                        print(f"\n  📂 衍生类型: {name_zh} / {name_en} ({count}个模型)")
+                        log(f"\n  📂 衍生类型: {name_zh} / {name_en} ({count}个模型)")
 
                         if link.startswith('/'):
                             full_url = f"https://aistudio.baidu.com{link}"
@@ -2164,7 +2174,7 @@ def fetch_aistudio_model_tree(
                             )
                             time.sleep(2)
                         except TimeoutException:
-                            print(f"    ⚠️  衍生模型列表页加载超时")
+                            log(f"    ⚠️  衍生模型列表页加载超时")
                             continue
 
                         # 提取所有模型卡片
@@ -2173,7 +2183,7 @@ def fetch_aistudio_model_tree(
                             "div.ai-model-list-wapper > div"
                         )
 
-                        print(f"    ✅ 找到 {len(cards)} 个模型")
+                        log(f"    ✅ 找到 {len(cards)} 个模型")
 
                         for card in cards:
                             try:
@@ -2208,9 +2218,9 @@ def fetch_aistudio_model_tree(
                                             By.CSS_SELECTOR,
                                             "span.ai-model-list-wapper-card-right-detail-one-like"
                                         ).text.strip()
-                                        print(f"      📅 更新时间: {last_modified}")
+                                        log(f"      📅 更新时间: {last_modified}")
                                     except Exception as e:
-                                        print(f"      ⚠️ 获取更新时间失败: {e}")
+                                        log(f"      ⚠️ 获取更新时间失败: {e}")
 
                                 # 处理模型名称
                                 if full_model_name.startswith("PaddlePaddle/"):
@@ -2223,12 +2233,12 @@ def fetch_aistudio_model_tree(
                                 should_fetch_url = model_key not in existing_models_with_url
 
                                 if not should_fetch_url:
-                                    print(f"      ⏭️  跳过URL获取（已有URL）: {model_key}")
+                                    log(f"      ⏭️  跳过URL获取（已有URL）: {model_key}")
                                     skipped_url_count += 1
                                     model_url = None
                                 else:
                                     # 复用AIStudioFetcher的_get_detailed_info方法获取URL
-                                    print(f"      🔍 获取URL: {model_key}")
+                                    log(f"      🔍 获取URL: {model_key}")
                                     detailed_count, model_url = fetcher._get_detailed_info(
                                         driver, card, card_idx, list_usage_count=usage_count
                                     )
@@ -2258,7 +2268,7 @@ def fetch_aistudio_model_tree(
                                 all_derivative_models.append(record)
 
                             except Exception as e:
-                                print(f"      ⚠️  处理模型时出错: {e}")
+                                log(f"      ⚠️  处理模型时出错: {e}")
                                 continue
 
                         # 返回基础模型详情页
@@ -2266,7 +2276,7 @@ def fetch_aistudio_model_tree(
                         time.sleep(1)
 
                     except Exception as e:
-                        print(f"  ⚠️  处理衍生类型时出错: {e}")
+                        log(f"  ⚠️  处理衍生类型时出错: {e}")
                         continue
 
                 processed_count += 1
@@ -2274,38 +2284,38 @@ def fetch_aistudio_model_tree(
                     progress_callback(processed_count)
 
             except NoSuchElementException:
-                print(f"  ⚪️  未找到模型血缘树元素")
+                log(f"  ⚪️  未找到模型血缘树元素")
                 continue
 
         # 转换为DataFrame
         if all_derivative_models:
             df = pd.DataFrame(all_derivative_models)
-            print(f"\n{'=' * 80}")
-            print(f"✅ 成功获取 {len(df)} 个衍生模型")
+            log(f"\n{'=' * 80}")
+            log(f"✅ 成功获取 {len(df)} 个衍生模型")
             if skipped_url_count > 0:
-                print(f"⚡ 跳过了 {skipped_url_count} 个已有URL的模型")
-            print(f"{'=' * 80}")
+                log(f"⚡ 跳过了 {skipped_url_count} 个已有URL的模型")
+            log(f"{'=' * 80}")
 
             # 保存到数据库（如果需要）
             if save_to_db and not df.empty:
                 try:
                     from ..db import save_to_db as save_to_db_func
                     save_to_db_func(df, DB_PATH)
-                    print(f"💾 已保存 {len(df)} 条记录到数据库")
+                    log(f"💾 已保存 {len(df)} 条记录到数据库")
                 except Exception as e:
-                    print(f"⚠️ 保存到数据库失败: {e}")
+                    log(f"⚠️ 保存到数据库失败: {e}")
 
             return df, len(df)
         else:
-            print(f"\n{'=' * 80}")
-            print(f"⚠️  没有找到任何衍生模型")
+            log(f"\n{'=' * 80}")
+            log(f"⚠️  没有找到任何衍生模型")
             if skipped_url_count > 0:
-                print(f"⚡ 跳过了 {skipped_url_count} 个已有URL的模型")
-            print(f"{'=' * 80}")
+                log(f"⚡ 跳过了 {skipped_url_count} 个已有URL的模型")
+            log(f"{'=' * 80}")
             return pd.DataFrame(), 0
 
     except Exception as e:
-        print(f"\n❌ 获取AI Studio Model Tree失败: {e}")
+        log(f"\n❌ 获取AI Studio Model Tree失败: {e}")
         import traceback
         traceback.print_exc()
         return pd.DataFrame(), 0
