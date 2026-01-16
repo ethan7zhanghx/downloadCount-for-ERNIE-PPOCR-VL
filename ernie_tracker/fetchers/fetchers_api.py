@@ -145,22 +145,10 @@ class ModelScopeFetcher(BaseFetcher):
                     if not base_model:
                         model_type = 'original'
 
-                # 3. ModelType (model_category)
-                model_category = None
-                if "ModelType" in info and info["ModelType"]:
-                    if isinstance(info["ModelType"], list) and len(info["ModelType"]) > 0:
-                        model_type_from_api = info["ModelType"][0].lower()
-                        # 映射到标准分类
-                        if 'paddleocr' in model_type_from_api and 'vl' in model_type_from_api:
-                            model_category = 'paddleocr-vl'
-                        elif 'ernie' in model_type_from_api:
-                            model_category = 'ernie-4.5'
-
-                # 如果 API 没有提供 model_category，使用 classify_model 函数推断
-                if not model_category:
-                    publisher = model_id.split("/")[0] if "/" in model_id else 'Unknown'
-                    model_name = model_id.split("/", 1)[1] if "/" in model_id else model_id
-                    model_category = classify_model(model_name, publisher, base_model)
+                # 3. model_category - 使用 classify_model 函数根据名称、发布者和 base_model 推断
+                publisher = model_id.split("/")[0] if "/" in model_id else 'Unknown'
+                model_name = model_id.split("/", 1)[1] if "/" in model_id else model_id
+                model_category = classify_model(model_name, publisher, base_model)
 
                 # 调试输出
                 if i <= 3:  # 只打印前3个模型
