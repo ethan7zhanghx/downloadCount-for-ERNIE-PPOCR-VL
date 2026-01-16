@@ -2175,7 +2175,7 @@ def fetch_aistudio_model_tree(
 
                         print(f"    ✅ 找到 {len(cards)} 个模型")
 
-                        for card in cards:
+                        for card_idx, card in enumerate(cards):
                             try:
                                 # 获取模型名称
                                 full_model_name = card.find_element(
