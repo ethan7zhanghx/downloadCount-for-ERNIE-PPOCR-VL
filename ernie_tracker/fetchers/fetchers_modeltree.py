@@ -1593,13 +1593,18 @@ def get_modelscope_model_tree_children(base_model_id: str, driver=None, progress
             driver.quit()
 
 
-def get_all_modelscope_derivatives(base_models: List[str] = None, auto_discover: bool = True) -> Tuple[pd.DataFrame, int]:
+def get_all_modelscope_derivatives(
+    base_models: List[str] = None,
+    auto_discover: bool = True,
+    progress_callback=None
+) -> Tuple[pd.DataFrame, int]:
     """
     获取 ModelScope 上所有指定基础模型的衍生模型
 
     Args:
         base_models: 基础模型ID列表（如果为None且auto_discover=True，则自动从数据库发现）
         auto_discover: 是否自动从数据库中发现所有ModelScope官方模型
+        progress_callback: 进度回调函数
 
     Returns:
         Tuple[DataFrame, int]: (衍生模型数据, 总数量)
@@ -1672,6 +1677,10 @@ def get_all_modelscope_derivatives(base_models: List[str] = None, auto_discover:
             print(f"[{idx}/{len(base_models)}] 处理基础模型: {base_model}")
             print(f"{'=' * 80}")
 
+            # 调用进度回调
+            if progress_callback:
+                progress_callback(idx)
+
             try:
                 # 获取该基础模型的衍生模型
                 derivatives = get_modelscope_model_tree_children(base_model, driver=driver)
@@ -1743,7 +1752,12 @@ def get_all_modelscope_derivatives(base_models: List[str] = None, auto_discover:
         return pd.DataFrame(), 0
 
 
-def update_modelscope_model_tree(save_to_db: bool = True, base_models: List[str] = None, auto_discover: bool = True) -> Tuple[pd.DataFrame, int]:
+def update_modelscope_model_tree(
+    save_to_db: bool = True,
+    base_models: List[str] = None,
+    auto_discover: bool = True,
+    progress_callback=None
+) -> Tuple[pd.DataFrame, int]:
     """
     更新 ModelScope Model Tree 数据（包含去重处理）
 
@@ -1751,6 +1765,7 @@ def update_modelscope_model_tree(save_to_db: bool = True, base_models: List[str]
         save_to_db: 是否保存到数据库
         base_models: 基础模型ID列表（如果为None且auto_discover=True，则自动从数据库发现）
         auto_discover: 是否自动从数据库中发现所有ModelScope官方模型
+        progress_callback: 进度回调函数
 
     Returns:
         Tuple[DataFrame, int]: (更新的数据, 总数量)
@@ -1758,7 +1773,11 @@ def update_modelscope_model_tree(save_to_db: bool = True, base_models: List[str]
     print("\n🔄 开始更新 ModelScope Model Tree 数据...")
 
     # 获取衍生模型（自动发现所有官方模型）
-    df, total_count = get_all_modelscope_derivatives(base_models=base_models, auto_discover=auto_discover)
+    df, total_count = get_all_modelscope_derivatives(
+        base_models=base_models,
+        auto_discover=auto_discover,
+        progress_callback=progress_callback
+    )
 
     if df.empty:
         print("⚠️ 没有获取到任何衍生模型数据")
