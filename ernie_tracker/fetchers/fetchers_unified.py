@@ -114,7 +114,8 @@ def fetch_hugging_face_data_unified(progress_callback=None, progress_total=None,
                                 "tags": None,
                                 "base_model": None,
                                 "data_source": 'search',  # 标记为传统搜索模式
-                                "search_keyword": search_term  # 记录搜索关键词
+                                "search_keyword": search_term,  # 记录搜索关键词
+                                "url": f"https://huggingface.co/{m.id}"  # 模型详情页URL
                             }
                             search_results.append(model_data)
 
@@ -246,7 +247,8 @@ def fetch_modelscope_data_unified(progress_callback=None, progress_total=None):
                 "download_count": downloads,
                 "search_keyword": search_keyword,
                 "created_at": created_at,
-                "last_modified": last_modified
+                "last_modified": last_modified,
+                "url": f"https://modelscope.cn/models/{model_id}"  # 模型详情页URL
             })
         except Exception as e:
             print(f"获取 {model_id} 失败: {e}")
@@ -256,7 +258,7 @@ def fetch_modelscope_data_unified(progress_callback=None, progress_total=None):
 
     df = pd.DataFrame(
         records,
-        columns=["date", "repo", "model_name", "publisher", "download_count", "search_keyword", "created_at", "last_modified"]
+        columns=["date", "repo", "model_name", "publisher", "download_count", "search_keyword", "created_at", "last_modified", "url"]
     )
     df['download_count'] = pd.to_numeric(df['download_count'], errors='coerce').fillna(0).astype(int)
     return df, total_count
@@ -391,7 +393,8 @@ def fetch_gitcode_data_unified(progress_callback=None, progress_total=None):
                 "repo": "GitCode",
                 "model_name": model_name,
                 "publisher": "飞桨PaddlePaddle",
-                "download_count": downloads
+                "download_count": downloads,
+                "url": model_link  # 模型详情页URL（从链接列表获取）
             })
 
         except Exception as e:
@@ -404,7 +407,7 @@ def fetch_gitcode_data_unified(progress_callback=None, progress_total=None):
 
     df = pd.DataFrame(
         results,
-        columns=["date", "repo", "model_name", "publisher", "download_count"]
+        columns=["date", "repo", "model_name", "publisher", "download_count", "url"]
     )
     df['download_count'] = pd.to_numeric(df['download_count'], errors='coerce').fillna(0).astype(int)
     return df, total_count
@@ -447,7 +450,8 @@ def fetch_caict_data_unified(progress_callback=None, progress_total=None):
                 "repo": "鲸智",
                 "model_name": model_name,
                 "publisher": "PaddlePaddle", # 🔧 修复：确保 publisher 始终为 "PaddlePaddle" (统一大小写)
-                "download_count": downloads
+                "download_count": downloads,
+                "url": model_link  # 模型详情页URL（从链接列表获取）
             })
 
         except Exception as e:

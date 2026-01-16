@@ -780,11 +780,15 @@ class GiteeFetcher(BaseFetcher):
                                 "div.flex.items-center.gap-2.self-stretch.pt-2.md\\:gap-3 > div:nth-child(2) > div"
                             ).text.strip()
 
+                            # 获取模型详情页URL
+                            model_url = link.get_attribute('href').strip()
+
                             self.results.append(self.create_record(
                                 model_name=model_name,
                                 publisher=publisher,
                                 download_count=download_count,
-                                search_keyword=search_term
+                                search_keyword=search_term,
+                                url=model_url  # 模型详情页URL
                             ))
 
                             total_count += 1
@@ -856,11 +860,15 @@ class ModelersFetcher(BaseFetcher):
                                 continue
                             seen.add(key)
 
+                            # 获取模型详情页URL
+                            model_url = card.get_attribute('href').strip()
+
                             self.results.append(self.create_record(
                                 model_name=model_name,
                                 publisher=publisher,
                                 download_count=download_count,
-                                search_keyword=search_term
+                                search_keyword=search_term,
+                                url=model_url  # 模型详情页URL
                             ))
 
                             total_models += 1
