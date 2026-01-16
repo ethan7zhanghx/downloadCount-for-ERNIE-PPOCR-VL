@@ -23,6 +23,7 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from tqdm.notebook import tqdm
 
 from ..config import SEARCH_QUERY, DB_PATH
+from .fetchers_modeltree import classify_model  # 🔧 新增：用于模型分类
 
 
 # hugging face
@@ -433,7 +434,9 @@ def fetch_gitcode_data_unified(progress_callback=None, progress_total=None):
                 "model_name": model_name,
                 "publisher": "飞桨PaddlePaddle",
                 "download_count": downloads,
-                "url": model_link  # 模型详情页URL（从链接列表获取）
+                "url": model_link,  # 模型详情页URL（从链接列表获取）
+                "last_modified": None,  # 🔧 新增：GitCode不提供更新时间字段
+                "created_at": None  # 🔧 新增：GitCode不提供创建时间字段
             })
 
         except Exception as e:

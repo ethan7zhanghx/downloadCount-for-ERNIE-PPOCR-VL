@@ -2189,7 +2189,7 @@ def fetch_aistudio_model_tree(
                                     "span.ai-model-list-wapper-card-right-detail-one-publisher"
                                 ).text.strip()
 
-                                # 获取下载量
+                                # 获取下载量和时间字段
                                 detail_items = card.find_elements(
                                     By.CSS_SELECTOR,
                                     "div.ai-model-list-wapper-card-right-detail-one-item-tip"
@@ -2199,6 +2199,18 @@ def fetch_aistudio_model_tree(
                                     By.CSS_SELECTOR,
                                     "span.ai-model-list-wapper-card-right-detail-one-like"
                                 ).text.strip()
+
+                                # 🔧 新增：获取更新时间（第3个tip）
+                                last_modified = None
+                                if len(detail_items) >= 3:
+                                    try:
+                                        last_modified = detail_items[2].find_element(
+                                            By.CSS_SELECTOR,
+                                            "span.ai-model-list-wapper-card-right-detail-one-like"
+                                        ).text.strip()
+                                        print(f"      📅 更新时间: {last_modified}")
+                                    except Exception as e:
+                                        print(f"      ⚠️ 获取更新时间失败: {e}")
 
                                 # 处理模型名称
                                 if full_model_name.startswith("PaddlePaddle/"):
@@ -2239,7 +2251,8 @@ def fetch_aistudio_model_tree(
                                     'base_model': base_model_name,
                                     'data_source': 'model_tree',
                                     'search_keyword': base_model_name,
-                                    'url': model_url  # 从search或model tree获取的URL
+                                    'url': model_url,  # 从search或model tree获取的URL
+                                    'last_modified': last_modified  # 🔧 新增：更新时间
                                 }
 
                                 all_derivative_models.append(record)
