@@ -407,22 +407,60 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
             error_msg = f"任务执行异常: {str(e)}\n{traceback.format_exc()}"
             return platform_name, None, False, 0, error_msg, []
 
+    def fetch_model_tree_task(platform_name):
+        """单个平台的Model Tree任务（纯数据处理）"""
+        try:
+            # 根据平台选择对应的Model Tree函数
+            if platform_name == "AI Studio":
+                from ernie_tracker.fetchers.fetchers_modeltree import fetch_aistudio_model_tree
+                df, count = fetch_aistudio_model_tree(
+                    progress_callback=lambda p, **kwargs: add_log(f"[AI Studio Model Tree] 已处理 {p} 个官方模型"),
+                    save_to_db=save_to_database,
+                    test_mode=False
+                )
+                return platform_name, df, count > 0, 0, None, []
+            elif platform_name == "ModelScope":
+                from ernie_tracker.fetchers.fetchers_modeltree import update_modelscope_model_tree
+                df, count = update_modelscope_model_tree(
+                    save_to_db=save_to_database,
+                    auto_discover=True,
+                    progress_callback=lambda p, **kwargs: add_log(f"[ModelScope Model Tree] 已处理 {p} 个官方模型")
+                )
+                return platform_name, df, count > 0, 0, None, []
+            else:
+                # 不支持Model Tree的平台
+                return platform_name, None, False, 0, "该平台不支持Model Tree", []
+        except Exception as e:
+            import traceback
+            error_msg = f"Model Tree执行异常: {str(e)}\n{traceback.format_exc()}"
+            return platform_name, None, False, 0, error_msg, []
+
     # 使用线程池并行执行
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(platforms), 4)) as executor:
-        # 提交所有任务
+    # 支持Model Tree的平台列表
+    model_tree_platforms = {"AI Studio", "ModelScope"}
+    platforms_with_model_tree = [p for p in platforms if p in model_tree_platforms]
+    platforms_without_model_tree = [p for p in platforms if p not in model_tree_platforms]
+
+    # 统计任务总数（Search任务 + Model Tree任务）
+    search_count = len(platforms)
+    model_tree_count = len(platforms_with_model_tree) if st.session_state.get('use_model_tree', True) else 0
+    total_tasks = search_count + model_tree_count
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(platforms) + model_tree_count, 6)) as executor:
+        # 提交所有Search任务
         future_to_platform = {
-            executor.submit(fetch_platform_task, platform): platform
+            executor.submit(fetch_platform_task, platform): ('search', platform)
             for platform in platforms
         }
 
         completed_count = 0
-        total_count = len(platforms)
+        search_completed_count = 0
 
         # 总体进度显示
         overall_placeholder = st.empty()
 
         # 实时更新各平台状态
-        while completed_count < total_count:
+        while completed_count < total_tasks:
             # 先检查并更新所有平台的进度（包括未完成的）
             for platform in platforms:
                 with progress_state[platform]['lock']:
@@ -441,34 +479,68 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
             # 检查已完成的任务
             for future in list(future_to_platform.keys()):
                 if future.done():
-                    platform_name = future_to_platform.pop(future)
+                    task_type, platform_name = future_to_platform.pop(future)
                     completed_count += 1
 
                     try:
                         # 获取结果
                         _, df, success, elapsed_time, error_message, progress_updates = future.result()
 
-                        # 更新该平台的最终状态
-                        if success:
-                            platform_status[platform_name]['status'].success(f"✅ {platform_name} 完成")
-                            final_message = progress_updates[-1]['message'] if progress_updates else "完成"
-                            platform_status[platform_name]['details'].success(final_message)
-                            platform_status[platform_name]['time'].success(f"⏱️ 用时: {elapsed_time:.2f} 秒")
-                            platform_status[platform_name]['progress'].progress(1.0)
+                        if task_type == 'search':
+                            # Search任务完成
+                            search_completed_count += 1
 
-                            if df is not None:
-                                all_dfs.append(df)
-                        else:
-                            platform_status[platform_name]['status'].error(f"❌ {platform_name} 失败")
-                            platform_status[platform_name]['details'].error(error_message)
-                            platform_status[platform_name]['time'].error(f"⏱️ 用时: {elapsed_time:.2f} 秒")
+                            # 更新该平台的Search状态
+                            if success:
+                                platform_status[platform_name]['status'].info(f"✅ {platform_name} Search完成")
+                                final_message = progress_updates[-1]['message'] if progress_updates else "Search完成"
+                                platform_status[platform_name]['details'].info(final_message)
+                                platform_status[platform_name]['time'].info(f"⏱️ Search用时: {elapsed_time:.2f} 秒")
+
+                                if df is not None:
+                                    all_dfs.append(df)
+
+                                # 如果该平台支持Model Tree且用户启用了Model Tree，立即提交Model Tree任务
+                                if platform_name in model_tree_platforms and st.session_state.get('use_model_tree', True):
+                                    platform_status[platform_name]['status'].info(f"🌳 {platform_name} 开始Model Tree...")
+                                    future_to_platform[executor.submit(fetch_model_tree_task, platform_name)] = ('model_tree', platform_name)
+                                    add_log(f"[{platform_name}] Search完成，开始Model Tree")
+                                else:
+                                    # 不支持Model Tree的平台，标记为完全完成
+                                    platform_status[platform_name]['status'].success(f"✅ {platform_name} 完成")
+                                    platform_status[platform_name]['progress'].progress(1.0)
+                            else:
+                                # Search失败
+                                platform_status[platform_name]['status'].error(f"❌ {platform_name} Search失败")
+                                platform_status[platform_name]['details'].error(error_message)
+                                platform_status[platform_name]['time'].error(f"⏱️ 用时: {elapsed_time:.2f} 秒")
+
+                        elif task_type == 'model_tree':
+                            # Model Tree任务完成
+                            if success:
+                                platform_status[platform_name]['status'].success(f"✅ {platform_name} 完成（含Model Tree）")
+                                platform_status[platform_name]['details'].success("Model Tree完成")
+                                platform_status[platform_name]['time'].success(f"⏱️ Model Tree用时: {elapsed_time:.2f} 秒")
+                                platform_status[platform_name]['progress'].progress(1.0)
+
+                                if df is not None and not df.empty:
+                                    all_dfs.append(df)
+                            else:
+                                # Model Tree失败（不影响Search的成功状态）
+                                platform_status[platform_name]['status'].warning(f"⚠️ {platform_name} Search完成，Model Tree失败")
+                                platform_status[platform_name]['details'].warning(f"Model Tree: {error_message}")
+                                platform_status[platform_name]['progress'].progress(1.0)
 
                     except Exception as e:
-                        platform_status[platform_name]['status'].error(f"❌ {platform_name} 异常")
-                        platform_status[platform_name]['details'].error(f"执行异常: {e}")
+                        if task_type == 'search':
+                            platform_status[platform_name]['status'].error(f"❌ {platform_name} 异常")
+                            platform_status[platform_name]['details'].error(f"执行异常: {e}")
+                        else:
+                            platform_status[platform_name]['status'].warning(f"⚠️ {platform_name} Model Tree异常")
+                            platform_status[platform_name]['details'].warning(f"Model Tree异常: {e}")
 
                     # 更新总体进度
-                    overall_placeholder.info(f"🎯 总体进度：{completed_count}/{total_count} 个平台完成")
+                    overall_placeholder.info(f"🎯 总体进度：{completed_count}/{total_tasks} 个任务完成（Search: {search_completed_count}/{search_count}）")
 
             # 更新日志显示（显示最新的20条）
             with log_lock:
@@ -483,57 +555,19 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
 
     total_elapsed_time = time.time() - total_start_time
 
-    # ========== 阶段2-3: Model Tree 补充爬取 ==========
-    model_tree_elapsed = 0  # Model Tree 总耗时
-
-    # AI Studio Model Tree
-    if "AI Studio" in platforms:
-        overall_placeholder.info(f"🎯 阶段1完成！用时：{total_elapsed_time:.2f} 秒")
-
-        from ernie_tracker.fetchers.fetchers_modeltree import fetch_aistudio_model_tree
-
-        df, count, elapsed = run_model_tree_with_progress(
-            "AI Studio",
-            lambda callback: fetch_aistudio_model_tree(
-                progress_callback=callback,
-                save_to_db=save_to_database,
-                test_mode=False
-            ),
-            save_to_db=False  # fetch_aistudio_model_tree内部已处理
-        )
-
-        model_tree_elapsed += elapsed
-        if df is not None and not df.empty:
-            all_dfs.append(df)
-
-    # ModelScope Model Tree
-    if "ModelScope" in platforms:
-        from ernie_tracker.fetchers.fetchers_modeltree import update_modelscope_model_tree
-
-        df, count, elapsed = run_model_tree_with_progress(
-            "ModelScope",
-            lambda callback: update_modelscope_model_tree(
-                save_to_db=save_to_database,
-                auto_discover=True,
-                progress_callback=callback
-            ),
-            save_to_db=False  # update_modelscope_model_tree内部已处理
-        )
-
-        model_tree_elapsed += elapsed
-        if df is not None and not df.empty:
-            all_dfs.append(df)
-
     # ========== 最终总结 ==========
     final_elapsed_time = time.time() - total_start_time
 
-    if model_tree_elapsed > 0:
+    # 统计Model Tree任务数量
+    model_tree_tasks_count = len(platforms_with_model_tree) if st.session_state.get('use_model_tree', True) else 0
+
+    if model_tree_tasks_count > 0:
         overall_placeholder.success(
             f"🎯 全部完成！总用时：{final_elapsed_time:.2f} 秒"
-            f"（阶段1: {total_elapsed_time:.2f}秒，Model Tree: {model_tree_elapsed:.2f}秒）"
+            f"（完成 {search_count} 个Search任务 + {model_tree_tasks_count} 个Model Tree任务）"
         )
     else:
-        overall_placeholder.success(f"🎯 并行抓取完成！总用时：{total_elapsed_time:.2f} 秒")
+        overall_placeholder.success(f"🎯 并行抓取完成！总用时：{final_elapsed_time:.2f} 秒")
 
     return all_dfs, total_elapsed_time
 
@@ -660,14 +694,17 @@ if page == "📥 数据更新":
                     platforms, fetchers_to_use, save_to_database
                 )
             else:
-                # 串行执行模式（原有逻辑）
+                # 串行执行模式（改进逻辑：每个平台Search完成后立即执行Model Tree）
                 st.markdown("### ⏳ 串行更新进度")
                 progress_placeholder = st.empty()
+
+                # 支持Model Tree的平台
+                model_tree_platforms = {"AI Studio", "ModelScope"}
 
                 for idx, platform in enumerate(platforms, start=1):
                     progress_placeholder.info(f"正在更新：**{platform}** ({idx}/{len(platforms)})")
 
-                    # 调用平台抓取函数
+                    # 步骤1: 调用平台Search抓取函数
                     fetch_func = fetchers_to_use.get(platform)
                     if fetch_func:
                         df = run_platform_fetcher(platform, fetch_func, save_to_database)
@@ -676,60 +713,42 @@ if page == "📥 数据更新":
 
                         elapsed = time.time() - total_start_time
                         status_msg = "数据已保存" if save_to_database else "仅预览"
-                        st.success(f"✅ {platform} 完成，用时 {elapsed:.2f} 秒，{status_msg}")
+                        st.success(f"✅ {platform} Search完成，用时 {elapsed:.2f} 秒，{status_msg}")
+
+                        # 步骤2: 如果该平台支持Model Tree且用户启用了Model Tree，立即执行
+                        if platform in model_tree_platforms and st.session_state.get('use_model_tree', True):
+                            st.info(f"🌳 开始执行 {platform} Model Tree...")
+
+                            if platform == "AI Studio":
+                                from ernie_tracker.fetchers.fetchers_modeltree import fetch_aistudio_model_tree
+                                df_mt, count_mt, elapsed_mt = run_model_tree_with_progress(
+                                    "AI Studio",
+                                    lambda callback: fetch_aistudio_model_tree(
+                                        progress_callback=callback,
+                                        save_to_db=save_to_database,
+                                        test_mode=False
+                                    ),
+                                    save_to_db=False
+                                )
+                            elif platform == "ModelScope":
+                                from ernie_tracker.fetchers.fetchers_modeltree import update_modelscope_model_tree
+                                df_mt, count_mt, elapsed_mt = run_model_tree_with_progress(
+                                    "ModelScope",
+                                    lambda callback: update_modelscope_model_tree(
+                                        save_to_db=save_to_database,
+                                        auto_discover=True,
+                                        progress_callback=callback
+                                    ),
+                                    save_to_db=False
+                                )
+
+                            if df_mt is not None and not df_mt.empty:
+                                all_dfs.append(df_mt)
+
+                            total_elapsed = time.time() - total_start_time
+                            st.success(f"✅ {platform} Model Tree完成，总用时 {total_elapsed:.2f} 秒")
 
                 total_elapsed_time = time.time() - total_start_time
-
-            # ========== 阶段2-3: Model Tree 补充爬取（串行模式）==========
-            model_tree_elapsed = 0
-
-            # AI Studio Model Tree
-            if "AI Studio" in platforms:
-                st.info(f"🎯 阶段1完成！用时：{total_elapsed_time:.2f} 秒")
-
-                from ernie_tracker.fetchers.fetchers_modeltree import fetch_aistudio_model_tree
-
-                df, count, elapsed = run_model_tree_with_progress(
-                    "AI Studio",
-                    lambda callback: fetch_aistudio_model_tree(
-                        progress_callback=callback,
-                        save_to_db=save_to_database,
-                        test_mode=False
-                    ),
-                    save_to_db=False  # fetch_aistudio_model_tree内部已处理
-                )
-
-                model_tree_elapsed += elapsed
-                if df is not None and not df.empty:
-                    all_dfs.append(df)
-
-            # ModelScope Model Tree
-            if "ModelScope" in platforms:
-                from ernie_tracker.fetchers.fetchers_modeltree import update_modelscope_model_tree
-
-                df, count, elapsed = run_model_tree_with_progress(
-                    "ModelScope",
-                    lambda callback: update_modelscope_model_tree(
-                        save_to_db=save_to_database,
-                        auto_discover=True,
-                        progress_callback=callback
-                    ),
-                    save_to_db=False  # update_modelscope_model_tree内部已处理
-                )
-
-                model_tree_elapsed += elapsed
-                if df is not None and not df.empty:
-                    all_dfs.append(df)
-
-            # 最终总结
-            final_elapsed_time = time.time() - total_start_time
-
-            if model_tree_elapsed > 0:
-                st.success(
-                    f"🎯 全部完成！总用时：{final_elapsed_time:.2f} 秒"
-                    f"（阶段1: {total_elapsed_time:.2f}秒，Model Tree: {model_tree_elapsed:.2f}秒）"
-                )
-            else:
                 st.info(f"🎯 串行抓取完成！总用时：{total_elapsed_time:.2f} 秒")
 
             # 数据预览
