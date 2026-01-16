@@ -514,8 +514,7 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
             "ModelScope",
             lambda callback: update_modelscope_model_tree(
                 save_to_db=save_to_database,
-                auto_discover=True,
-                progress_callback=callback
+                auto_discover=True
             ),
             save_to_db=False  # update_modelscope_model_tree内部已处理
         )
@@ -652,6 +651,7 @@ if page == "📥 数据更新":
         else:
             all_dfs = []
             total_elapsed_time = 0
+            total_start_time = time.time()  # 初始化总开始时间（用于计算最终用时）
 
             if use_parallel:
                 # 并行执行模式
@@ -660,7 +660,6 @@ if page == "📥 数据更新":
                 )
             else:
                 # 串行执行模式（原有逻辑）
-                total_start_time = time.time()
                 st.markdown("### ⏳ 串行更新进度")
                 progress_placeholder = st.empty()
 
@@ -711,8 +710,7 @@ if page == "📥 数据更新":
                     "ModelScope",
                     lambda callback: update_modelscope_model_tree(
                         save_to_db=save_to_database,
-                        auto_discover=True,
-                        progress_callback=callback
+                        auto_discover=True
                     ),
                     save_to_db=False  # update_modelscope_model_tree内部已处理
                 )
