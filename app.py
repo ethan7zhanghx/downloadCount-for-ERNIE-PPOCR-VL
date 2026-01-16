@@ -532,6 +532,12 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
             'latest_update': None,
             'lock': threading.Lock()
         }
+        # 为支持Model Tree的平台添加Model Tree进度状态
+        if platform in model_tree_platforms:
+            progress_state[f"{platform}_model_tree"] = {
+                'latest_update': None,
+                'lock': threading.Lock()
+            }
 
     def log_callback_wrapper(message):
         """日志回调函数包装器（解析日志级别）"""
@@ -570,6 +576,16 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
                     'time': st.empty()
                 }
                 platform_status[platform]['status'].info(f"🔄 {platform} 等待中...")
+
+                # 为支持Model Tree的平台添加Model Tree进度显示
+                if platform in model_tree_platforms:
+                    st.markdown("---")
+                    st.markdown(f"**🌳 {platform} Model Tree**")
+                    platform_status[f"{platform}_model_tree"] = {
+                        'progress': st.progress(0),
+                        'details': st.empty()
+                    }
+                    platform_status[f"{platform}_model_tree"]['details'].info("等待Search完成...")
 
         # 添加美化后的日志输出区域
         st.markdown("---")
@@ -613,11 +629,26 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
     def fetch_model_tree_task(platform_name):
         """单个平台的Model Tree任务（纯数据处理）"""
         try:
+            # 获取官方模型数量作为参考总数
+            official_count = get_official_model_count(platform_name)
+
+            # 创建Model Tree进度回调函数
+            def model_tree_progress_callback(p, **kwargs):
+                # 日志输出
+                log_callback_wrapper(f"[{platform_name} Model Tree] 已处理 {p} 个官方模型")
+                # 更新进度
+                update_progress(f"{platform_name}_model_tree", {
+                    'processed': p,
+                    'total': official_count,
+                    'progress': min(p / official_count, 1.0) if official_count > 0 else 0,
+                    'message': f"已处理 {p} / {official_count} 个官方模型"
+                })
+
             # 根据平台选择对应的Model Tree函数
             if platform_name == "AI Studio":
                 from ernie_tracker.fetchers.fetchers_modeltree import fetch_aistudio_model_tree
                 df, count = fetch_aistudio_model_tree(
-                    progress_callback=lambda p, **kwargs: log_callback_wrapper(f"[AI Studio Model Tree] 已处理 {p} 个官方模型"),
+                    progress_callback=model_tree_progress_callback,
                     save_to_db=save_to_database,
                     test_mode=False
                 )
@@ -627,7 +658,7 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
                 df, count = update_modelscope_model_tree(
                     save_to_db=save_to_database,
                     auto_discover=True,
-                    progress_callback=lambda p, **kwargs: log_callback_wrapper(f"[ModelScope Model Tree] 已处理 {p} 个官方模型")
+                    progress_callback=model_tree_progress_callback
                 )
                 return platform_name, df, count > 0, 0, None, []
             else:
@@ -666,6 +697,7 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
         while completed_count < total_tasks:
             # 先检查并更新所有平台的进度（包括未完成的）
             for platform in platforms:
+                # 更新Search进度
                 with progress_state[platform]['lock']:
                     latest = progress_state[platform]['latest_update']
                     if latest and 'progress' in latest:
@@ -678,6 +710,22 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
                         except Exception as e:
                             # 忽略UI更新错误，避免中断流程
                             pass
+
+                # 更新Model Tree进度（如果支持）
+                if platform in model_tree_platforms:
+                    model_tree_key = f"{platform}_model_tree"
+                    with progress_state[model_tree_key]['lock']:
+                        latest_mt = progress_state[model_tree_key]['latest_update']
+                        if latest_mt and 'progress' in latest_mt:
+                            try:
+                                # 更新Model Tree进度条
+                                platform_status[model_tree_key]['progress'].progress(latest_mt['progress'])
+                                # 更新Model Tree详细信息
+                                if latest_mt['message']:
+                                    platform_status[model_tree_key]['details'].info(latest_mt['message'])
+                            except Exception as e:
+                                # 忽略UI更新错误
+                                pass
 
             # 检查已完成的任务
             for future in list(future_to_platform.keys()):
@@ -706,6 +754,9 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
                                 # 如果该平台支持Model Tree且用户启用了Model Tree，立即提交Model Tree任务
                                 if platform_name in model_tree_platforms and st.session_state.get('use_model_tree', True):
                                     platform_status[platform_name]['status'].info(f"🌳 {platform_name} 开始Model Tree...")
+                                    # 更新Model Tree状态为运行中
+                                    model_tree_key = f"{platform_name}_model_tree"
+                                    platform_status[model_tree_key]['details'].info("🔄 Model Tree运行中...")
                                     future_to_platform[executor.submit(fetch_model_tree_task, platform_name)] = ('model_tree', platform_name)
                                     log_callback_wrapper(f"[{platform_name}] Search完成，开始Model Tree")
                                 else:
@@ -720,19 +771,21 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
 
                         elif task_type == 'model_tree':
                             # Model Tree任务完成
+                            model_tree_key = f"{platform_name}_model_tree"
                             if success:
                                 platform_status[platform_name]['status'].success(f"✅ {platform_name} 完成（含Model Tree）")
-                                platform_status[platform_name]['details'].success("Model Tree完成")
+                                platform_status[model_tree_key]['details'].success("✅ Model Tree完成")
                                 platform_status[platform_name]['time'].success(f"⏱️ Model Tree用时: {elapsed_time:.2f} 秒")
                                 platform_status[platform_name]['progress'].progress(1.0)
+                                platform_status[model_tree_key]['progress'].progress(1.0)
 
                                 if df is not None and not df.empty:
                                     all_dfs.append(df)
                             else:
                                 # Model Tree失败（不影响Search的成功状态）
                                 platform_status[platform_name]['status'].warning(f"⚠️ {platform_name} Search完成，Model Tree失败")
-                                platform_status[platform_name]['details'].warning(f"Model Tree: {error_message}")
-                                platform_status[platform_name]['progress'].progress(1.0)
+                                platform_status[model_tree_key]['details'].warning(f"❌ Model Tree失败: {error_message}")
+                                platform_status[model_tree_key]['progress'].progress(1.0)
 
                     except Exception as e:
                         if task_type == 'search':
