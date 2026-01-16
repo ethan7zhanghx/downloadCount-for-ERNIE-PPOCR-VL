@@ -1050,14 +1050,779 @@ def get_weekly_new_model_tree_derivatives(current_date: str, previous_date: str,
         }
 
 
+# =============================================================================
+# ModelScope Model Tree 功能模块
+# =============================================================================
+
+def get_modelscope_model_tree_children(base_model_id: str, driver=None, progress_callback=None) -> List[Dict]:
+    """
+    获取 ModelScope 模型的衍生模型（通过解析页面 HTML）
+
+    Args:
+        base_model_id: 基础模型ID（如 'PaddlePaddle/PaddleOCR-VL'）
+        driver: Selenium WebDriver 实例（可选，如果不提供则创建新的）
+        progress_callback: 进度回调函数
+
+    Returns:
+        List[Dict]: 衍生模型信息列表
+    """
+    from ..utils import create_chrome_driver
+    from ..config import SELENIUM_TIMEOUT
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import TimeoutException, NoSuchElementException
+    from modelscope.hub.api import HubApi
+    import time
+    import re
+
+    print(f"\n📊 获取 {base_model_id} 的 ModelScope Model Tree...")
+
+    should_close_driver = False
+    if driver is None:
+        driver = create_chrome_driver()
+        should_close_driver = True
+
+    try:
+        # 构建模型页面URL
+        model_url = f"https://modelscope.cn/models/{base_model_id}"
+        print(f"  访问: {model_url}")
+        driver.get(model_url)
+
+        # 等待页面加载
+        try:
+            WebDriverWait(driver, SELENIUM_TIMEOUT).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+            time.sleep(2)  # 额外等待确保动态内容加载
+        except TimeoutException:
+            print(f"  ⚠️ 页面加载超时")
+            return []
+
+        # 查找所有模型血缘（genealogy）相关的衍生类型元素
+        # 直接查找 span.antd5-tree-node-content-wrapper（这是真正可点击的元素）
+        try:
+            # 查找所有可点击的 tree node wrapper 元素
+            node_wrappers = driver.find_elements(
+                By.CSS_SELECTOR,
+                "span.antd5-tree-node-content-wrapper"
+            )
+
+            if not node_wrappers:
+                print(f"  ⚪️ 没有找到衍生类型")
+                return []
+
+            print(f"  ✅ 找到 {len(node_wrappers)} 个 node wrapper 元素")
+
+            # 过滤出真正的衍生类型（排除"当前模型"）
+            derivative_types = []
+            for wrapper in node_wrappers:
+                try:
+                    # 在每个 wrapper 内部查找 span.antd5-tree-title，然后再找 div.acss-1lekzkb
+                    try:
+                        tree_title = wrapper.find_element(By.CSS_SELECTOR, "span.antd5-tree-title")
+                        content_div = tree_title.find_element(By.CSS_SELECTOR, "div.acss-1lekzkb")
+                    except:
+                        continue
+
+                    # 获取元素文本，检查是否为"当前模型"
+                    element_text = content_div.text.strip()
+
+                    if not element_text:
+                        continue
+
+                    # 检查是否包含"当前模型"标记
+                    if "当前模型" in element_text:
+                        continue
+
+                    # 提取中英文名称
+                    # 根据HTML结构，应该是"微调 Finetunes"或类似格式
+                    text_parts = element_text.split('\n')
+                    if len(text_parts) >= 2:
+                        name_zh = text_parts[0].strip()
+                        name_en = text_parts[1].strip()
+
+                        # 提取模型数量（通常在最后一个部分）
+                        count_match = re.search(r'共(\d+)个模型', element_text)
+                        count = int(count_match.group(1)) if count_match else 0
+
+                        if count > 0:
+                            # 🔧 关键修复：需要点击的是内部的 div.acss-hd4erf（包含中文标题的div）
+                            # 而不是外层的 wrapper
+                            try:
+                                clickable_element = content_div.find_element(By.CSS_SELECTOR, "div.acss-hd4erf")
+                            except:
+                                # 如果找不到，回退到使用wrapper
+                                clickable_element = wrapper
+
+                            derivative_types.append({
+                                'element': clickable_element,  # 使用内部的可点击div
+                                'name_zh': name_zh,
+                                'name_en': name_en,
+                                'count': count
+                            })
+                            print(f"    📂 {name_zh} / {name_en}: {count}个模型")
+
+                except Exception as e:
+                    print(f"    ⚠️ 解析衍生类型元素时出错: {e}")
+                    continue
+
+            if not derivative_types:
+                print(f"  ⚪️ 没有找到有效的衍生类型")
+                return []
+
+            # 初始化 ModelScope API
+            api = HubApi()
+            all_derivatives = []
+
+            # 🔧 新策略：先打开侧边栏（只点击第一个衍生类型）
+            # 然后在侧边栏内部通过点击标签切换不同类型
+            print(f"\n  📂 打开侧边栏...")
+
+            if not derivative_types:
+                return []
+
+            # 使用第一个衍生类型打开侧边栏
+            first_type = derivative_types[0]
+            first_element = first_type['element']
+
+            try:
+                # 滚动到元素可见
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", first_element)
+                time.sleep(0.5)
+
+                # 点击第一个衍生类型打开侧边栏
+                first_element.click()
+                print(f"    ✅ 已点击第一个衍生类型打开侧边栏")
+
+                # 等待侧边栏加载
+                print(f"    ⏳ 等待侧边栏加载...")
+                before_click_links = len(driver.find_elements(By.CSS_SELECTOR, "a[href*='/models/']"))
+
+                max_wait = 10
+                waited = 0
+                while waited < max_wait:
+                    time.sleep(1)
+                    waited += 1
+                    current_links = len(driver.find_elements(By.CSS_SELECTOR, "a[href*='/models/']"))
+                    if current_links > before_click_links:
+                        print(f"    ✅ 侧边栏已加载（等待了 {waited} 秒）")
+                        break
+                else:
+                    print(f"    ⚠️ 等待 {max_wait} 秒后侧边栏仍未加载")
+                    return []
+
+            except Exception as e:
+                print(f"    ❌ 打开侧边栏失败: {e}")
+                return []
+
+            # 🔧 关键改进：在侧边栏内部通过点击标签切换不同类型
+            # 查找侧边栏内的标签元素
+            try:
+                # 等待侧边栏完全加载
+                time.sleep(2)
+
+                # 查找所有衍生类型标签
+                tab_elements = driver.find_elements(By.CSS_SELECTOR, "div.acss-xqwyei")
+
+                if not tab_elements:
+                    print(f"    ⚠️ 侧边栏中没有找到标签元素")
+                    # 使用原来的逻辑（逐个点击外部元素）
+                    print(f"    📋 回退到原来的点击方式...")
+                else:
+                    print(f"    ✅ 找到 {len(tab_elements)} 个侧边栏标签")
+
+                    # 为每个标签建立映射：标签文本 -> 衍生类型信息
+                    tab_mapping = []
+                    for tab in tab_elements:
+                        try:
+                            tab_text = tab.text.strip()
+                            # 提取中文名称（第一行）
+                            name_zh = tab_text.split('\n')[0] if '\n' in tab_text else tab_text
+
+                            # 在 derivative_types 中找到对应的类型信息
+                            matching_type = None
+                            for dt in derivative_types:
+                                if dt['name_zh'] == name_zh:
+                                    matching_type = dt
+                                    break
+
+                            if matching_type:
+                                tab_mapping.append({
+                                    'tab': tab,
+                                    'name_zh': matching_type['name_zh'],
+                                    'name_en': matching_type['name_en'],
+                                    'count': matching_type['count']
+                                })
+                        except:
+                            continue
+
+                    print(f"    📋 建立了 {len(tab_mapping)} 个标签映射")
+
+                    # 逐个点击标签并获取模型
+                    for idx, tab_info in enumerate(tab_mapping):
+                        try:
+                            name_zh = tab_info['name_zh']
+                            name_en = tab_info['name_en']
+                            tab = tab_info['tab']
+
+                            print(f"\n  [{idx + 1}/{len(tab_mapping)}] 切换到: {name_zh} / {name_en}")
+
+                            # 点击标签
+                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tab)
+                            time.sleep(0.5)
+
+                            # 使用JavaScript点击（更可靠）
+                            driver.execute_script("arguments[0].click();", tab)
+                            print(f"    ✅ 已切换标签")
+
+                            # 等待内容加载
+                            time.sleep(2)
+
+                            # 查找当前标签下的模型卡片
+                            all_links = driver.find_elements(By.CSS_SELECTOR, "a[href*='/models/']")
+                            model_cards = []
+                            for link in all_links:
+                                href = link.get_attribute('href')
+                                if href and '/models/' in href:
+                                    if not any(x in href for x in ['/summary', '/files', '/feedback', '/file/view']):
+                                        model_cards.append(link)
+
+                            if not model_cards:
+                                print(f"    ⚪️ 当前标签下没有找到模型卡片")
+                                continue
+
+                            print(f"    ✅ 找到 {len(model_cards)} 个模型卡片")
+
+                            # 提取模型信息
+                            for card in model_cards:
+                                try:
+                                    href = card.get_attribute('href')
+                                    if not href or '/models/' not in href:
+                                        continue
+
+                                    model_id = href.split('/models/')[-1]
+                                    if '?' in model_id:
+                                        model_id = model_id.split('?')[0]
+
+                                    print(f"      🔍 检查模型: {model_id}")
+
+                                    # 跳过基础模型本身
+                                    if model_id == base_model_id:
+                                        print(f"        ⏭️ 跳过（这是基础模型本身）")
+                                        continue
+
+                                    print(f"      📦 {model_id}")
+
+                                    # 使用API获取模型详细信息
+                                    try:
+                                        info = api.get_model(model_id, revision="master")
+                                        downloads = info.get("Downloads", 0)
+
+                                        from datetime import datetime
+                                        created_at = None
+                                        last_modified = None
+
+                                        if "CreatedTime" in info and info["CreatedTime"]:
+                                            try:
+                                                created_at = datetime.fromtimestamp(info["CreatedTime"]).strftime('%Y-%m-%d')
+                                            except:
+                                                pass
+
+                                        if "LastUpdatedTime" in info and info["LastUpdatedTime"]:
+                                            try:
+                                                last_modified = datetime.fromtimestamp(info["LastUpdatedTime"]).strftime('%Y-%m-%d')
+                                            except:
+                                                pass
+
+                                        publisher = model_id.split('/')[0] if '/' in model_id else 'Unknown'
+
+                                        derivative_info = {
+                                            'id': model_id,
+                                            'author': publisher,
+                                            'downloads': downloads,
+                                            'pipeline_tag': None,
+                                            'tags': [],
+                                            'created_at': created_at,
+                                            'last_modified': last_modified,
+                                            'likes': info.get('Likes', 0),
+                                            'model_type': name_en.lower(),
+                                            'base_model': base_model_id,
+                                            'name_zh': name_zh,
+                                            'name_en': name_en
+                                        }
+
+                                        all_derivatives.append(derivative_info)
+
+                                    except Exception as e:
+                                        print(f"        ⚠️ API获取失败: {e}")
+                                        publisher = model_id.split('/')[0] if '/' in model_id else 'Unknown'
+                                        derivative_info = {
+                                            'id': model_id,
+                                            'author': publisher,
+                                            'downloads': 0,
+                                            'pipeline_tag': None,
+                                            'tags': [],
+                                            'created_at': None,
+                                            'last_modified': None,
+                                            'likes': 0,
+                                            'model_type': name_en.lower(),
+                                            'base_model': base_model_id,
+                                            'name_zh': name_zh,
+                                            'name_en': name_en
+                                        }
+                                        all_derivatives.append(derivative_info)
+
+                                except Exception as e:
+                                    print(f"      ⚠️ 处理模型时出错: {e}")
+                                    continue
+
+                        except Exception as e:
+                            print(f"    ⚠️ 处理标签时出错: {e}")
+                            continue
+
+                    print(f"\n  ✅ 总共获取 {len(all_derivatives)} 个衍生模型")
+                    return all_derivatives
+
+            except Exception as e:
+                print(f"    ❌ 侧边栏标签切换失败: {e}")
+                import traceback
+                traceback.print_exc()
+                # 继续执行，尝试使用原来的逻辑
+                pass
+
+            # 如果侧边栏标签切换失败，使用原来的逐个点击方式
+            print(f"\n  📋 使用原来的逐个点击方式...")
+            for idx, deriv_type in enumerate(derivative_types):
+                try:
+                    name_zh = deriv_type['name_zh']
+                    name_en = deriv_type['name_en']
+                    count = deriv_type['count']
+                    element = deriv_type['element']
+
+                    print(f"\n  [{idx + 1}/{len(derivative_types)}] 处理衍生类型: {name_zh} / {name_en}")
+
+                    # 点击衍生类型元素，打开侧边栏
+                    try:
+                        # 滚动到元素可见
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+                        time.sleep(0.5)
+
+                        # 点击元素
+                        element.click()
+                        print(f"    ✅ 已点击衍生类型")
+
+                        # 🔧 关键修复：等待侧边栏真的出现，而不是简单等待固定时间
+                        # 等待链接数量增加（说明侧边栏已经加载了新内容）
+                        print(f"    ⏳ 等待侧边栏加载...")
+
+                        # 先获取当前链接数量
+                        before_click_links = len(driver.find_elements(By.CSS_SELECTOR, "a[href*='/models/']"))
+
+                        # 等待最多10秒，直到链接数量增加
+                        max_wait = 10
+                        waited = 0
+                        while waited < max_wait:
+                            time.sleep(1)
+                            waited += 1
+                            current_links = len(driver.find_elements(By.CSS_SELECTOR, "a[href*='/models/']"))
+                            if current_links > before_click_links:
+                                print(f"    ✅ 侧边栏已加载（等待了 {waited} 秒）")
+                                break
+                        else:
+                            print(f"    ⚠️ 等待 {max_wait} 秒后侧边栏仍未加载新内容")
+
+                    except Exception as e:
+                        print(f"    ⚠️ 点击衍生类型失败: {e}")
+                        continue
+
+                    # 查找侧边栏中的模型卡片
+                    # 根据HTML结构，模型卡片在侧边栏中，包含模型名称
+                    try:
+                        # 尝试多种选择器查找模型卡片
+                        model_cards = []
+
+                        # 方法1: 直接查找模型链接（排除基础模型本身的子页面）
+                        all_links = driver.find_elements(By.CSS_SELECTOR, "a[href*='/models/']")
+                        for link in all_links:
+                            href = link.get_attribute('href')
+                            if href and '/models/' in href:
+                                # 排除基础模型本身的子页面（如 summary、files、feedback）
+                                # 只保留真正的模型链接（格式：/models/username/modelname）
+                                if not any(x in href for x in ['/summary', '/files', '/feedback', '/file/view']):
+                                    model_cards.append(link)
+
+                        if not model_cards:
+                            print(f"    ⚪️ 侧边栏中没有找到模型卡片")
+                            # 尝试关闭侧边栏（按ESC键或点击背景）
+                            try:
+                                from selenium.webdriver.common.keys import Keys
+                                driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+                                time.sleep(0.5)
+                            except:
+                                pass
+                            continue
+
+                        print(f"    ✅ 找到 {len(model_cards)} 个模型卡片")
+
+                        # 提取模型信息
+                        for card in model_cards:
+                            try:
+                                # 获取模型ID（从href属性）
+                                href = card.get_attribute('href')
+                                if not href or '/models/' not in href:
+                                    print(f"      ⚠️ 跳过无效链接: href={href}")
+                                    continue
+
+                                model_id = href.split('/models/')[-1]
+                                if '?' in model_id:
+                                    model_id = model_id.split('?')[0]
+
+                                print(f"      🔍 检查模型: {model_id}")
+
+                                # 跳过基础模型本身
+                                if model_id == base_model_id:
+                                    print(f"        ⏭️ 跳过（这是基础模型本身）")
+                                    continue
+
+                                print(f"      📦 {model_id}")
+
+                                # 使用API获取模型详细信息
+                                try:
+                                    info = api.get_model(model_id, revision="master")
+
+                                    # 提取下载量
+                                    downloads = info.get("Downloads", 0)
+
+                                    # 提取时间字段
+                                    from datetime import datetime
+                                    created_at = None
+                                    last_modified = None
+
+                                    if "CreatedTime" in info and info["CreatedTime"]:
+                                        try:
+                                            created_at = datetime.fromtimestamp(info["CreatedTime"]).strftime('%Y-%m-%d')
+                                        except:
+                                            pass
+
+                                    if "LastUpdatedTime" in info and info["LastUpdatedTime"]:
+                                        try:
+                                            last_modified = datetime.fromtimestamp(info["LastUpdatedTime"]).strftime('%Y-%m-%d')
+                                        except:
+                                            pass
+
+                                    # 提取发布者
+                                    publisher = model_id.split('/')[0] if '/' in model_id else 'Unknown'
+
+                                    # 创建衍生模型记录
+                                    derivative_info = {
+                                        'id': model_id,
+                                        'author': publisher,
+                                        'downloads': downloads,
+                                        'pipeline_tag': None,
+                                        'tags': [],
+                                        'created_at': created_at,
+                                        'last_modified': last_modified,
+                                        'likes': info.get('Likes', 0),
+                                        'model_type': name_en.lower(),  # finetune, quantized, etc.
+                                        'base_model': base_model_id,
+                                        'name_zh': name_zh,
+                                        'name_en': name_en
+                                    }
+
+                                    all_derivatives.append(derivative_info)
+
+                                except Exception as e:
+                                    print(f"        ⚠️ API获取失败: {e}")
+                                    # 即使API失败，也可以保存基本信息
+                                    publisher = model_id.split('/')[0] if '/' in model_id else 'Unknown'
+                                    derivative_info = {
+                                        'id': model_id,
+                                        'author': publisher,
+                                        'downloads': 0,
+                                        'pipeline_tag': None,
+                                        'tags': [],
+                                        'created_at': None,
+                                        'last_modified': None,
+                                        'likes': 0,
+                                        'model_type': name_en.lower(),
+                                        'base_model': base_model_id,
+                                        'name_zh': name_zh,
+                                        'name_en': name_en
+                                    }
+                                    all_derivatives.append(derivative_info)
+
+                            except Exception as e:
+                                print(f"      ⚠️ 处理模型卡片时出错: {e}")
+                                continue
+
+                        # 关闭侧边栏（按ESC键或点击背景）
+                        try:
+                            from selenium.webdriver.common.keys import Keys
+                            driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+                            time.sleep(0.5)
+                        except:
+                            pass
+
+                        if progress_callback:
+                            progress_callback(idx + 1, total=len(derivative_types))
+
+                    except Exception as e:
+                        print(f"    ⚠️ 处理侧边栏时出错: {e}")
+                        continue
+
+                except Exception as e:
+                    print(f"  ⚠️ 处理衍生类型时出错: {e}")
+                    continue
+
+            print(f"\n  ✅ 总共获取 {len(all_derivatives)} 个衍生模型")
+            return all_derivatives
+
+        except NoSuchElementException:
+            print(f"  ⚪️ 未找到模型血缘元素")
+            return []
+
+    except Exception as e:
+        print(f"  ❌ 获取 {base_model_id} 的 ModelScope Model Tree 失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+    finally:
+        if should_close_driver and driver:
+            driver.quit()
+
+
+def get_all_modelscope_derivatives(base_models: List[str] = None, auto_discover: bool = True) -> Tuple[pd.DataFrame, int]:
+    """
+    获取 ModelScope 上所有指定基础模型的衍生模型
+
+    Args:
+        base_models: 基础模型ID列表（如果为None且auto_discover=True，则自动从数据库发现）
+        auto_discover: 是否自动从数据库中发现所有ModelScope官方模型
+
+    Returns:
+        Tuple[DataFrame, int]: (衍生模型数据, 总数量)
+    """
+    from ..utils import create_chrome_driver
+    import sqlite3
+
+    # 如果没有提供基础模型列表，自动从数据库发现
+    if base_models is None and auto_discover:
+        print(f"\n🔍 自动发现 ModelScope 官方模型...")
+        try:
+            conn = sqlite3.connect(DB_PATH)
+
+            # 查询所有ModelScope平台的官方模型
+            query = """
+                SELECT DISTINCT publisher, model_name
+                FROM model_downloads
+                WHERE repo = 'ModelScope'
+                AND (
+                    publisher IN ('百度', 'baidu', 'Paddle', 'PaddlePaddle', 'yiyan', '一言')
+                    OR publisher LIKE '%百度%'
+                    OR publisher LIKE '%baidu%'
+                    OR publisher LIKE '%Paddle%'
+                )
+                ORDER BY publisher, model_name
+            """
+
+            df = pd.read_sql_query(query, conn)
+            conn.close()
+
+            if df.empty:
+                print(f"  ⚠️ 数据库中没有找到 ModelScope 官方模型")
+                base_models = []
+            else:
+                # 构建模型ID列表
+                base_models = [f"{row['publisher']}/{row['model_name']}" for _, row in df.iterrows()]
+                print(f"  ✅ 发现 {len(base_models)} 个官方模型")
+
+                # 显示前10个模型
+                for i, model_id in enumerate(base_models[:10]):
+                    print(f"    {i+1}. {model_id}")
+                if len(base_models) > 10:
+                    print(f"    ... 还有 {len(base_models) - 10} 个模型")
+
+        except Exception as e:
+            print(f"  ❌ 自动发现失败: {e}")
+            base_models = []
+
+    # 如果仍然没有基础模型，使用默认列表
+    if not base_models:
+        base_models = [
+            'PaddlePaddle/PaddleOCR-VL',
+        ]
+        print(f"\n📋 使用默认基础模型列表")
+
+    print(f"\n🚀 开始获取 ModelScope 衍生模型...")
+    print(f"📋 基础模型列表: {len(base_models)} 个")
+    print(f"   {', '.join(base_models[:5])}")
+    if len(base_models) > 5:
+        print(f"   ... 还有 {len(base_models) - 5} 个模型")
+
+    all_models = []
+    processed_ids = set()
+
+    driver = create_chrome_driver()
+
+    try:
+        for idx, base_model in enumerate(base_models, start=1):
+            print(f"\n{'=' * 80}")
+            print(f"[{idx}/{len(base_models)}] 处理基础模型: {base_model}")
+            print(f"{'=' * 80}")
+
+            try:
+                # 获取该基础模型的衍生模型
+                derivatives = get_modelscope_model_tree_children(base_model, driver=driver)
+
+                if derivatives:
+                    print(f"  ✅ 获取到 {len(derivatives)} 个衍生模型")
+
+                    for deriv in derivatives:
+                        model_id = deriv['id']
+
+                        # 跳过重复的模型
+                        if model_id in processed_ids:
+                            print(f"      ⏭️ 跳过重复模型: {model_id}")
+                            continue
+
+                        processed_ids.add(model_id)
+
+                        # 创建记录
+                        record = {
+                            'date': date.today().isoformat(),
+                            'repo': 'ModelScope',
+                            'model_name': model_id.split('/')[-1] if '/' in model_id else model_id,
+                            'publisher': deriv['author'],
+                            'download_count': deriv['downloads'],
+                            'model_category': classify_model(
+                                deriv['id'],
+                                deriv['author'],
+                                deriv['base_model']
+                            ),
+                            'model_type': deriv.get('model_type', 'other'),
+                            'base_model': deriv['base_model'],
+                            'data_source': 'model_tree',
+                            'tags': str(deriv.get('tags', [])),
+                            'likes': deriv.get('likes'),
+                            'library_name': None,
+                            'pipeline_tag': deriv.get('pipeline_tag'),
+                            'created_at': deriv.get('created_at'),
+                            'last_modified': deriv.get('last_modified'),
+                            'fetched_at': date.today().isoformat(),
+                            'base_model_from_api': deriv['base_model'],
+                            'search_keyword': deriv['base_model']
+                        }
+
+                        all_models.append(record)
+                        print(f"    ✓ {deriv['name_zh']}: {model_id}")
+                else:
+                    print(f"  ⚪️ 没有找到衍生模型")
+
+            except Exception as e:
+                print(f"  ❌ 处理 {base_model} 时出错: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+
+    finally:
+        driver.quit()
+
+    # 转换为 DataFrame
+    if all_models:
+        df = pd.DataFrame(all_models)
+        print(f"\n{'=' * 80}")
+        print(f"✅ 成功获取 {len(df)} 个衍生模型")
+        print(f"{'=' * 80}")
+        return df, len(all_models)
+    else:
+        print(f"\n{'=' * 80}")
+        print(f"⚠️ 没有找到任何衍生模型")
+        print(f"{'=' * 80}")
+        return pd.DataFrame(), 0
+
+
+def update_modelscope_model_tree(save_to_db: bool = True, base_models: List[str] = None, auto_discover: bool = True) -> Tuple[pd.DataFrame, int]:
+    """
+    更新 ModelScope Model Tree 数据（包含去重处理）
+
+    Args:
+        save_to_db: 是否保存到数据库
+        base_models: 基础模型ID列表（如果为None且auto_discover=True，则自动从数据库发现）
+        auto_discover: 是否自动从数据库中发现所有ModelScope官方模型
+
+    Returns:
+        Tuple[DataFrame, int]: (更新的数据, 总数量)
+    """
+    print("\n🔄 开始更新 ModelScope Model Tree 数据...")
+
+    # 获取衍生模型（自动发现所有官方模型）
+    df, total_count = get_all_modelscope_derivatives(base_models=base_models, auto_discover=auto_discover)
+
+    if df.empty:
+        print("⚠️ 没有获取到任何衍生模型数据")
+        return df, 0
+
+    # 去重处理：检查数据库中是否已存在相同的模型
+    if save_to_db:
+        try:
+            import sqlite3
+            from ..db import load_data_from_db, save_to_db as save_to_db_func
+
+            # 获取现有 ModelScope 数据
+            conn = sqlite3.connect(DB_PATH)
+            existing_query = """
+                SELECT DISTINCT publisher, model_name
+                FROM model_downloads
+                WHERE repo = 'ModelScope'
+            """
+            existing_df = pd.read_sql_query(existing_query, conn)
+            conn.close()
+
+            if not existing_df.empty:
+                # 创建已存在模型的集合
+                existing_models = set(
+                    f"{row['publisher']}/{row['model_name']}"
+                    for _, row in existing_df.iterrows()
+                )
+
+                # 过滤掉已存在的模型
+                df['model_key'] = df['publisher'] + '/' + df['model_name']
+                new_df = df[~df['model_key'].isin(existing_models)].copy()
+                new_df = new_df.drop(columns=['model_key'])
+
+                print(f"📊 去重前: {len(df)} 条，去重后: {len(new_df)} 条")
+                print(f"🗑️  过滤掉 {len(df) - len(new_df)} 条已存在的记录")
+
+                if new_df.empty:
+                    print("⚠️ 没有新的模型需要保存")
+                    return df, 0
+
+                df = new_df
+
+            # 保存到数据库
+            save_to_db_func(df, DB_PATH)
+            print(f"💾 已保存 {len(df)} 条新记录到数据库")
+
+        except Exception as e:
+            print(f"❌ 保存数据时出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    return df, total_count
+
+
 if __name__ == "__main__":
     # 测试功能
     print("=== 测试 Model Tree 功能 ===")
     print("1. Hugging Face Model Tree")
     print("2. AI Studio Model Tree")
+    print("3. ModelScope Model Tree (NEW)")
+    print("4. 全部测试")
     print()
 
-    choice = input("请选择测试模式 (1/2/3=全部测试，默认=3): ").strip()
+    choice = input("请选择测试模式 (1/2/3/4=全部, 默认=4): ").strip()
 
     # 测试分类功能
     test_cases = [
@@ -1074,7 +1839,7 @@ if __name__ == "__main__":
         print(f"  {model_name} -> {category}")
 
     # 测试Hugging Face Model Tree
-    if choice in ['1', '3', '']:
+    if choice in ['1', '4', '']:
         print("\n🌳 测试 Hugging Face Model Tree:")
         df, count = get_all_ernie_derivatives(include_paddleocr=True)
         print(f"总共获取到 {count} 个模型")
@@ -1084,9 +1849,22 @@ if __name__ == "__main__":
             print(df[['model_name', 'publisher', 'download_count', 'model_category']].head())
 
     # 测试AI Studio Model Tree
-    if choice in ['2', '3', '']:
+    if choice in ['2', '4', '']:
         print("\n🌳 测试 AI Studio Model Tree (测试模式):")
         df, count = update_aistudio_model_tree(save_to_db=False, test_mode=True)
+        print(f"总共获取到 {count} 个衍生模型")
+
+        if not df.empty:
+            print("\n前5个衍生模型:")
+            print(df[['model_name', 'publisher', 'download_count', 'model_type', 'base_model']].head())
+
+    # 测试 ModelScope Model Tree
+    if choice in ['3', '4', '']:
+        print("\n🌳 测试 ModelScope Model Tree:")
+        df, count = update_modelscope_model_tree(
+            save_to_db=False,
+            base_models=['PaddlePaddle/PaddleOCR-VL']
+        )
         print(f"总共获取到 {count} 个衍生模型")
 
         if not df.empty:
