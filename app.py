@@ -718,8 +718,8 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
 
         df, count, elapsed = run_model_tree_with_progress(
             "AI Studio",
-            lambda callback: fetch_aistudio_model_tree(
-                progress_callback=callback,
+            lambda progress_callback: fetch_aistudio_model_tree(
+                progress_callback=progress_callback,
                 save_to_db=save_to_database,
                 test_mode=False
             ),
@@ -740,10 +740,10 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
 
         df, count, elapsed = run_model_tree_with_progress(
             "ModelScope",
-            lambda callback: update_modelscope_model_tree(
+            lambda progress_callback: update_modelscope_model_tree(
                 save_to_db=save_to_database,
                 auto_discover=True,
-                progress_callback=callback
+                progress_callback=progress_callback
             ),
             save_to_db=False  # update_modelscope_model_tree内部已处理
         )
@@ -942,8 +942,8 @@ if page == "📥 数据更新":
 
                 df, count, elapsed = run_model_tree_with_progress(
                     "AI Studio",
-                    lambda callback: fetch_aistudio_model_tree(
-                        progress_callback=callback,
+                    lambda progress_callback: fetch_aistudio_model_tree(
+                        progress_callback=progress_callback,
                         save_to_db=save_to_database,
                         test_mode=False
                     ),
@@ -960,10 +960,10 @@ if page == "📥 数据更新":
 
                 df, count, elapsed = run_model_tree_with_progress(
                     "ModelScope",
-                    lambda callback: update_modelscope_model_tree(
+                    lambda progress_callback: update_modelscope_model_tree(
                         save_to_db=save_to_database,
                         auto_discover=True,
-                        progress_callback=callback
+                        progress_callback=progress_callback
                     ),
                     save_to_db=False  # update_modelscope_model_tree内部已处理
                 )
