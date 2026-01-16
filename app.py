@@ -512,7 +512,7 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
 
         df, count, elapsed = run_model_tree_with_progress(
             "ModelScope",
-            lambda callback: update_modelscope_model_tree(
+            lambda **kwargs: update_modelscope_model_tree(
                 save_to_db=save_to_database,
                 auto_discover=True
             ),
@@ -708,7 +708,7 @@ if page == "📥 数据更新":
 
                 df, count, elapsed = run_model_tree_with_progress(
                     "ModelScope",
-                    lambda callback: update_modelscope_model_tree(
+                    lambda **kwargs: update_modelscope_model_tree(
                         save_to_db=save_to_database,
                         auto_discover=True
                     ),
