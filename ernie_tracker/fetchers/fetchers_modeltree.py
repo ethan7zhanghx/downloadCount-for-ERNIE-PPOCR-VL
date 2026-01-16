@@ -1921,7 +1921,8 @@ def get_aistudio_official_models():
 def fetch_aistudio_model_tree(
     progress_callback=None,
     include_official_publishers=None,
-    test_mode=False
+    test_mode=False,
+    save_to_db=False
 ):
     """
     获取AI Studio官方模型的Model Tree（衍生模型）
@@ -1930,6 +1931,7 @@ def fetch_aistudio_model_tree(
         progress_callback: 进度回调函数
         include_official_publishers: 官方发布者列表（默认使用标准列表）
         test_mode: 测试模式，只处理第一个模型
+        save_to_db: 是否保存到数据库
 
     Returns:
         tuple: (DataFrame, total_count) 衍生模型数据和数量
@@ -2250,6 +2252,15 @@ def fetch_aistudio_model_tree(
             if skipped_url_count > 0:
                 print(f"⚡ 跳过了 {skipped_url_count} 个已有URL的模型")
             print(f"{'=' * 80}")
+
+            # 保存到数据库（如果需要）
+            if save_to_db and not df.empty:
+                try:
+                    from ..db import save_to_db as save_to_db_func
+                    save_to_db_func(df, DB_PATH)
+                    print(f"💾 已保存 {len(df)} 条记录到数据库")
+                except Exception as e:
+                    print(f"⚠️ 保存到数据库失败: {e}")
 
             return df, len(df)
         else:
