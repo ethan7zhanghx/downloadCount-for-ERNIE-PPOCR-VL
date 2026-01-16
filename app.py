@@ -634,15 +634,21 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
 
             # 创建Model Tree进度回调函数
             def model_tree_progress_callback(p, **kwargs):
-                # 日志输出
-                log_callback_wrapper(f"[{platform_name} Model Tree] 已处理 {p} 个官方模型")
-                # 更新进度
-                update_progress(f"{platform_name}_model_tree", {
-                    'processed': p,
-                    'total': official_count,
-                    'progress': min(p / official_count, 1.0) if official_count > 0 else 0,
-                    'message': f"已处理 {p} / {official_count} 个官方模型"
-                })
+                # 处理两种类型的调用：
+                # 1. 字符串 - 日志消息（来自 fetch_aistudio_model_tree 的 log() 函数）
+                # 2. 整数 - 进度更新
+                if isinstance(p, str):
+                    # 字符串：仅输出日志
+                    log_callback_wrapper(f"[{platform_name} Model Tree] {p}")
+                else:
+                    # 整数：输出日志并更新进度条
+                    log_callback_wrapper(f"[{platform_name} Model Tree] 已处理 {p} 个官方模型")
+                    update_progress(f"{platform_name}_model_tree", {
+                        'processed': p,
+                        'total': official_count,
+                        'progress': min(p / official_count, 1.0) if official_count > 0 else 0,
+                        'message': f"已处理 {p} / {official_count} 个官方模型"
+                    })
 
             # 根据平台选择对应的Model Tree函数
             if platform_name == "AI Studio":
