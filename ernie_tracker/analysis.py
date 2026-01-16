@@ -1520,7 +1520,9 @@ def calculate_periodic_stats(current_date, selected_series=None):
             'model_name': model_name,
             'download_count': int(model_row.get('download_count', 0)),
             'model_category': model_row.get('model_category', ''),
-            'model_type': model_row.get('model_type', '')
+            'model_type': model_row.get('model_type', ''),
+            'base_model': model_row.get('base_model', ''),
+            'url': model_row.get('url', '')
         })
 
     # 按下载量排序
