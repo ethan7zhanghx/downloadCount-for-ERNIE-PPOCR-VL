@@ -2185,6 +2185,8 @@ def fetch_aistudio_model_tree(
 
                         log(f"    ✅ 找到 {len(cards)} 个模型")
 
+                        # 🔧 修复stale element reference：先提取所有卡片数据，再处理
+                        card_data_list = []
                         for card_idx, card in enumerate(cards):
                             try:
                                 # 获取模型名称
@@ -2218,9 +2220,30 @@ def fetch_aistudio_model_tree(
                                             By.CSS_SELECTOR,
                                             "span.ai-model-list-wapper-card-right-detail-one-like"
                                         ).text.strip()
-                                        log(f"      📅 更新时间: {last_modified}")
-                                    except Exception as e:
-                                        log(f"      ⚠️ 获取更新时间失败: {e}")
+                                    except:
+                                        pass
+
+                                # 保存卡片数据，避免stale element reference
+                                card_data_list.append({
+                                    'full_model_name': full_model_name,
+                                    'publisher': publisher,
+                                    'usage_count': usage_count,
+                                    'last_modified': last_modified,
+                                    'card_element': card  # 保存元素引用用于后续获取URL
+                                })
+
+                            except Exception as e:
+                                log(f"      ⚠️  提取卡片信息时出错: {e}")
+                                continue
+
+                        # 处理所有卡片数据
+                        for idx, card_data in enumerate(card_data_list):
+                            try:
+                                full_model_name = card_data['full_model_name']
+                                publisher = card_data['publisher']
+                                usage_count = card_data['usage_count']
+                                last_modified = card_data['last_modified']
+                                card = card_data['card_element']
 
                                 # 处理模型名称
                                 if full_model_name.startswith("PaddlePaddle/"):
@@ -2240,7 +2263,7 @@ def fetch_aistudio_model_tree(
                                     # 复用AIStudioFetcher的_get_detailed_info方法获取URL
                                     log(f"      🔍 获取URL: {model_key}")
                                     detailed_count, model_url = fetcher._get_detailed_info(
-                                        driver, card, card_idx, list_usage_count=usage_count
+                                        driver, card, idx, list_usage_count=usage_count
                                     )
                                     if detailed_count:
                                         usage_count = detailed_count
