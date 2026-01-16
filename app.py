@@ -372,34 +372,80 @@ def run_platforms_parallel(platforms, fetchers_to_use, save_to_database=True):
 
     total_elapsed_time = time.time() - total_start_time
 
-    # AI Studio Model Tree 补充爬取（在第一轮完成后）
+    # ========== 阶段2: AI Studio Model Tree 补充爬取 ==========
     if "AI Studio" in platforms and st.session_state.get('use_model_tree', True):
-        overall_placeholder.info(f"🎯 平台爬取完成！总用时：{total_elapsed_time:.2f} 秒")
-        overall_placeholder.info("🌳 正在补充 AI Studio Model Tree（衍生模型）...")
+        overall_placeholder.info(f"🎯 阶段1完成！用时：{total_elapsed_time:.2f} 秒")
+
+        # 创建 Model Tree 进度显示区域
+        st.markdown("### 🌳 AI Studio Model Tree 进度")
+        mt_status = st.empty()
+        mt_progress = st.progress(0)
+        mt_details = st.empty()
 
         try:
-            from ernie_tracker.fetchers.fetchers_modeltree import update_aistudio_model_tree
+            from ernie_tracker.fetchers.fetchers_modeltree import fetch_aistudio_model_tree
 
-            model_tree_df, model_tree_count = update_aistudio_model_tree(
-                save_to_db=save_to_database,
+            mt_status.info("🔄 正在获取 AI Studio 衍生模型...")
+
+            # 定义进度回调
+            def mt_progress_callback(processed, discovered_total=None):
+                # 获取官方模型总数（从数据库）
+                try:
+                    import sqlite3
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT COUNT(DISTINCT model_name)
+                        FROM model_downloads
+                        WHERE repo = 'AI Studio'
+                        AND (
+                            publisher IN ('百度', 'baidu', 'Paddle', 'PaddlePaddle', 'yiyan', '一言')
+                            OR publisher LIKE '%百度%'
+                            OR publisher LIKE '%baidu%'
+                            OR publisher LIKE '%Paddle%'
+                        )
+                    """)
+                    total_official = cursor.fetchone()[0] or 1
+                    conn.close()
+                except:
+                    total_official = 1
+
+                progress = min(processed / total_official, 1.0) if total_official > 0 else 0
+                mt_progress.progress(progress)
+                mt_details.info(f"已处理 {processed} / {total_official} 个官方模型")
+
+            # 执行 Model Tree 获取
+            model_tree_df, model_tree_count = fetch_aistudio_model_tree(
+                progress_callback=mt_progress_callback,
                 test_mode=False
             )
+
+            # 保存到数据库
+            if save_to_database and not model_tree_df.empty:
+                from ernie_tracker.db import save_to_db
+                save_to_db(model_tree_df, DB_PATH)
 
             # 计算总耗时（包括Model Tree）
             final_elapsed_time = time.time() - total_start_time
 
             if model_tree_count > 0:
                 all_dfs.append(model_tree_df)
-                overall_placeholder.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒（含Model Tree）")
-                overall_placeholder.success(f"✅ AI Studio Model Tree 完成：获取 {model_tree_count} 个衍生模型")
+                mt_status.success(f"✅ AI Studio Model Tree 完成")
+                mt_progress.progress(1.0)
+                mt_details.success(f"获取 {model_tree_count} 个衍生模型")
+                st.success(f"🎯 全部完成！总用时：{final_elapsed_time:.2f} 秒（含Model Tree）")
+                st.success(f"✅ AI Studio Model Tree 完成：获取 {model_tree_count} 个衍生模型")
             else:
-                overall_placeholder.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒（含Model Tree）")
-                overall_placeholder.info("ℹ️  AI Studio Model Tree：没有找到新的衍生模型")
+                mt_status.info("ℹ️  未找到新的衍生模型")
+                mt_progress.progress(1.0)
+                st.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒（含Model Tree）")
+                st.info("ℹ️  AI Studio Model Tree：没有找到新的衍生模型")
 
         except Exception as e:
             final_elapsed_time = time.time() - total_start_time
-            overall_placeholder.warning(f"⚠️  AI Studio Model Tree 失败（不影响主流程）：{e}")
-            overall_placeholder.success(f"✅ 全部完成！总用时：{final_elapsed_time:.2f} 秒")
+            mt_status.error(f"❌ Model Tree 失败")
+            st.warning(f"⚠️  AI Studio Model Tree 失败（不影响主流程）：{e}")
+            st.success(f"✅ 平台抓取完成！用时：{total_elapsed_time:.2f} 秒")
     else:
         # 没有AI Studio或未启用Model Tree
         overall_placeholder.success(f"🎯 并行抓取完成！总用时：{total_elapsed_time:.2f} 秒")
