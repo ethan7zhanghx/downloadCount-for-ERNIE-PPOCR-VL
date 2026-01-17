@@ -77,7 +77,7 @@ class AIStudioFetcher(BaseFetcher):
         self._log('error', message)
 
     def _is_simplified_count(self, count_str):
-        """判断下载量是否为简化形式（如1k+, 7.2w等），需要获取精确值
+        """判断下载量是否为简化形式（如1k+, 7.2w, 7.3千等），需要获取精确值
 
         Args:
             count_str: 下载量字符串，如 "72456", "72.4k", "7.2w", "1k+"
@@ -88,10 +88,20 @@ class AIStudioFetcher(BaseFetcher):
         if not count_str:
             return False
 
-        count_str = str(count_str).strip().upper()
+        count_str = str(count_str).strip()
 
-        # 检查是否包含k/K或w/W（简化形式）
-        return 'K' in count_str or 'W' in count_str or '+' in count_str
+        # 纯数字（可能包含逗号）视为精确值
+        if count_str.replace(',', '').replace('.', '').replace('+', '').isdigit():
+            # 检查是否包含小数点（如 "7.3" 不是简化格式）
+            if '.' in count_str:
+                # 有小数点的数字，可能被截断了，需要获取完整值
+                return True
+            return False
+
+        # 检查是否包含简化标记
+        count_str_upper = count_str.upper()
+        simplified_markers = ['K', 'W', 'M', '+', '千', '万', '亿']
+        return any(marker in count_str_upper for marker in simplified_markers)
 
     def _parse_download_count(self, count_str):
         """解析下载量字符串，转换为数字
