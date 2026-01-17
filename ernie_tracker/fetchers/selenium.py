@@ -77,7 +77,7 @@ class AIStudioFetcher(BaseFetcher):
         self._log('error', message)
 
     def _is_simplified_count(self, count_str):
-        """判断下载量是否为简化形式（如1k+, 7.2w等），需要获取精确值
+        """判断下载量是否为简化形式（如1k+, 7.2w, 7.3千等），需要获取精确值
 
         Args:
             count_str: 下载量字符串，如 "72456", "72.4k", "7.2w", "1k+"
@@ -88,10 +88,20 @@ class AIStudioFetcher(BaseFetcher):
         if not count_str:
             return False
 
-        count_str = str(count_str).strip().upper()
+        count_str = str(count_str).strip()
 
-        # 检查是否包含k/K或w/W（简化形式）
-        return 'K' in count_str or 'W' in count_str or '+' in count_str
+        # 纯数字（可能包含逗号）视为精确值
+        if count_str.replace(',', '').replace('.', '').replace('+', '').isdigit():
+            # 检查是否包含小数点（如 "7.3" 不是简化格式）
+            if '.' in count_str:
+                # 有小数点的数字，可能被截断了，需要获取完整值
+                return True
+            return False
+
+        # 检查是否包含简化标记
+        count_str_upper = count_str.upper()
+        simplified_markers = ['K', 'W', 'M', '+', '千', '万', '亿']
+        return any(marker in count_str_upper for marker in simplified_markers)
 
     def _parse_download_count(self, count_str):
         """解析下载量字符串，转换为数字
@@ -225,8 +235,36 @@ class AIStudioFetcher(BaseFetcher):
                 self._log_debug(f"  [详情页 #{card_index}] 下载量元素已出现 (耗时: {(time.time() - element_wait_start)*1000:.2f}ms)")
 
                 extract_start = time.time()
-                detailed_count = extract_numbers(element.text)
-                self._log_info(f"  [详情页 #{card_index}] ✅ 获取下载量: {detailed_count} (提取耗时: {(time.time() - extract_start)*1000:.2f}ms)")
+                element_text = element.text.strip()
+                self._log_debug(f"  [详情页 #{card_index}] 原始文本: {element_text}")
+
+                # 检查是否为简化格式
+                if self._is_simplified_count(element_text):
+                    self._log_warning(f"  [详情页 #{card_index}] ⚠️  详情页显示简化格式: {element_text}")
+
+                    # 尝试等待更长时间，看是否会更新为精确值
+                    if retry_count < max_retries - 1:
+                        self._log_info(f"  [详情页 #{card_index}] 等待3秒，看是否会更新为精确值...")
+                        time.sleep(3)
+                        element_text = element.text.strip()
+                        self._log_debug(f"  [详情页 #{card_index}] 等待后文本: {element_text}")
+
+                        # 如果仍是简化格式，刷新页面重试
+                        if self._is_simplified_count(element_text):
+                            self._log_info(f"  [详情页 #{card_index}] 仍为简化格式，刷新页面重试...")
+                            driver.refresh()
+                            time.sleep(2)
+                            continue
+                    else:
+                        # 最后一次重试仍然失败
+                        self._log_error(f"  [详情页 #{card_index}] ❌ 详情页始终显示简化格式，无法获取精确值: {element_text}")
+                        self._log_error(f"  [详情页 #{card_index}] 跳过此模型，不保存估算值")
+                        return None, None  # 返回 None 表示失败
+                else:
+                    # 是精确值，提取数字
+                    detailed_count = extract_numbers(element_text)
+                    self._log_info(f"  [详情页 #{card_index}] ✅ 获取精确下载量: {detailed_count} (提取耗时: {(time.time() - extract_start)*1000:.2f}ms)")
+                    break  # 成功获取精确值，退出重试循环
 
                 # 核对列表页和详情页下载量
                 if list_usage_count:

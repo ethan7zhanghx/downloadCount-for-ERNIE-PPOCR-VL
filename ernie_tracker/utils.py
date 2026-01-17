@@ -110,14 +110,46 @@ def create_chrome_driver(headless=SELENIUM_HEADLESS):
 
 def extract_numbers(text):
     """
-    从文本中提取数字
+    从文本中提取数字，支持 K/M 后缀
 
     Args:
-        text: 包含数字的文本
+        text: 包含数字的文本，可能是 "72456", "7.3k", "1.2M" 等
 
     Returns:
-        提取的第一个数字（整数），如果没有则返回 None
+        提取的数字（整数），如果没有则返回 None
+        - "72456" -> 72456
+        - "7.3k" -> 7300
+        - "1.2M" -> 1200000
+        - "1k+" -> 1000
     """
+    if not text:
+        return None
+
+    text = text.strip().lower()
+
+    # 如果已经是纯数字，直接返回
+    if text.replace(',', '').isdigit():
+        return int(text.replace(',', ''))
+
+    # 匹配 K 后缀（如 7.3k, 1.2k, 1k, 1k+）
+    k_match = re.match(r'^(\d+(?:\.\d+)?)k\+?$', text)
+    if k_match:
+        num = float(k_match.group(1))
+        return int(num * 1000)
+
+    # 匹配 M 后缀（如 1.2M, 1M, 1M+）
+    m_match = re.match(r'^(\d+(?:\.\d+)?)m\+?$', text)
+    if m_match:
+        num = float(m_match.group(1))
+        return int(num * 1000000)
+
+    # 匹配 W 后缀（中文万，如 7.3w, 1.2w）
+    w_match = re.match(r'^(\d+(?:\.\d+)?)w\+?$', text)
+    if w_match:
+        num = float(w_match.group(1))
+        return int(num * 10000)
+
+    # 兜底：提取所有数字，取第一个
     numbers = re.findall(r'\d+', text.replace(',', ''))
     return int(numbers[0]) if numbers else None
 
