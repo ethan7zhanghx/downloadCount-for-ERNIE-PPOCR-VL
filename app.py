@@ -1156,97 +1156,184 @@ elif page == "📊 ERNIE-4.5 分析":
             if report_data is None:
                 st.error("❌ 无法生成周报，请检查选择的日期是否有数据。")
             else:
-                tables = format_report_tables(report_data)
+                # 保存到session_state
+                st.session_state['report_data_ernie'] = report_data
+                st.session_state['current_date'] = current_date
+                st.session_state['previous_date'] = previous_date
+                st.rerun()
 
-                st.success(f"✅ 周报生成成功！对比时间段：{previous_date} → {current_date}")
+        # 显示周报结果（从session_state或新生成的）
+        report_data = st.session_state.get('report_data_ernie')
 
-                # 检查并显示负增长警告
-                warnings_df = tables.get('negative_growth_warnings')
-                if warnings_df is not None and not warnings_df.empty:
-                    st.markdown("### ⚠️ 负增长警告")
-                    st.error(f"检测到 {len(warnings_df)} 个模型出现负增长！这可能表示数据采集问题或模型被下架。")
-                    st.dataframe(warnings_df, use_container_width=True)
-                    st.markdown("---")
+        if report_data is not None:
+            tables = format_report_tables(report_data)
 
-                # 显示总体情况摘要
-                st.markdown("### 📝 总体情况摘要")
-                stats = report_data['summary_stats']
-                
-                # 格式化数字
-                def format_num(n):
-                    return f"{n/10000:.2f}万"
+            # 获取保存的日期
+            saved_current_date = st.session_state.get('current_date', current_date)
+            saved_previous_date = st.session_state.get('previous_date', previous_date)
 
-                def format_percent(p):
-                    return f"{p:.2%}"
+            st.success(f"✅ 周报生成成功！对比时间段：{saved_previous_date} → {saved_current_date}")
 
-                # 计算百分比
-                official_total_percent = stats['official_current_total'] / stats['all_current_total'] if stats['all_current_total'] else 0
-                derivative_total_percent = stats['derivative_current_total'] / stats['all_current_total'] if stats['all_current_total'] else 0
-                official_growth_percent = stats['official_growth'] / stats['all_growth'] if stats['all_growth'] else 0
-                derivative_growth_percent = stats['derivative_growth'] / stats['all_growth'] if stats['all_growth'] else 0
+            # 检查并显示负增长警告
+            warnings_df = tables.get('negative_growth_warnings')
+            if warnings_df is not None and not warnings_df.empty:
+                st.markdown("### ⚠️ 负增长警告")
+                st.error(f"检测到 {len(warnings_df)} 个模型出现负增长！这可能表示数据采集问题或模型被下架。")
+                st.dataframe(warnings_df, use_container_width=True)
 
-                summary_text = f"""
-                截至 **{current_date}**，模型累计下载 **{format_num(stats['all_current_total'])}** 次
-                （含官方模型 **{format_num(stats['official_current_total'])}** 次，占比 **{format_percent(official_total_percent)}**，
-                衍生 **{format_num(stats['derivative_current_total'])}** 次，占比 **{format_percent(derivative_total_percent)}**），
-                较上周增长 **{format_num(stats['all_growth'])}** 次
-                （官方模型 **{format_num(stats['official_growth'])}** 次，占比 **{format_percent(official_growth_percent)}**，
-                衍生模型增长 **{format_num(stats['derivative_growth'])}** 次，占比 **{format_percent(derivative_growth_percent)}**）。
-                """
-                st.markdown(summary_text)
+                # 保存warnings_df到session_state
+                st.session_state['warnings_df'] = warnings_df
 
-                # 累计/本周新增衍生模型数量
-                new_models_list_count = len(tables.get('all_new_models', pd.DataFrame()))
-                st.info(
-                    f"累计衍生模型：{int(stats.get('derivative_current_total_models', 0) or 0)} 个｜"
-                    f"本周新增衍生（HF非官方差集）：{int(stats.get('derivative_new_models', 0) or 0)} 个｜"
-                    f"新增列表展示：{new_models_list_count} 个"
-                )
+                # 添加重新获取按钮
+                with st.expander("🔄 重新获取负增长模型下载量", expanded=False):
+                    st.info("💡 此功能将重新从平台API获取这些模型的最新下载量并更新到数据库。目前支持 Hugging Face 和 ModelScope 平台。")
 
-                # 社区和模型维度摘要
-                st.markdown("### 📈 社区与模型维度摘要")
-                community_summary = report_data['community_summary']
-                
-                # 社区维度
-                community_text = f"""
-                - **社区维度**：Hugging Face下载量最高，**{community_summary['hf_top_model_name']}** 为本周HF平台下载最高模型，增长 **{community_summary['hf_top_model_growth']/10000:.2f}万** 次。
-                """
-                st.markdown(community_text)
+                    if st.button("🚀 开始重新获取", type="primary", key="refetch_ernie"):
+                        # 直接在按钮回调中执行，不要rerun
+                        if 'warnings_df' in st.session_state:
+                            warnings_data = st.session_state['warnings_df']
 
-                # 模型维度
-                top3_downloads_str = " > ".join([f"{name}({int(val)})" for name, val in community_summary['top3_downloads_details'].items()])
-                top3_growth_str = " > ".join([f"{name}({int(val)})" for name, val in community_summary['top3_growth_details'].items()])
-                
-                model_text = f"""
-                - **模型维度**：
-                    - 模型（官方）下载总量前三位：{top3_downloads_str}
-                    - 本周（官方）增长最快前三位：{top3_growth_str}
-                """
-                st.markdown(model_text)
+                            # 转换warnings_df为负增长模型列表
+                            negative_list = []
+                            for idx, row in warnings_data.iterrows():
+                                negative_list.append({
+                                    'platform': row['平台'],
+                                    'model_name': row['模型名称'],
+                                    'publisher': row['发布者'],
+                                    'current': row['本周下载量']
+                                })
 
-                # 显示汇总信息
-                st.markdown("### 📊 平台汇总")
-                st.dataframe(tables['platform_summary'], use_container_width=True)
+                            # 获取current_date，用于保存数据
+                            target_date = st.session_state.get('current_date', date.today().isoformat())
 
-                # Top榜单
-                col1, col2 = st.columns(2)
+                            st.write(f"🔄 准备重新获取 {len(negative_list)} 个模型，将保存到日期: {target_date}")
 
-                with col1:
-                    st.markdown("### 🏆 Top 5 增长最高的模型")
-                    st.dataframe(tables['top5_growth'], use_container_width=True)
+                            # 执行重新获取
+                            try:
+                                from ernie_tracker.fetchers.fetchers_single_model import refetch_models_batch
+                                from ernie_tracker.db import save_to_db
 
-                with col2:
-                    st.markdown("### 🥇 Top 3 总下载量最高的模型")
-                    st.dataframe(tables['top3_downloads'], use_container_width=True)
+                                with st.spinner("正在重新获取模型下载量..."):
+                                    success_list, failed_list = refetch_models_batch(negative_list, target_date=target_date)
 
-                # 各平台榜首
-                st.markdown("### 🎯 各平台榜首模型")
-                st.dataframe(
-                    tables['platform_top_models'],
-                    use_container_width=True,
-                    column_config={
-                        "下载量最高模型": st.column_config.TextColumn(
-                            "下载量最高模型",
+                                # 直接保存成功的数据到数据库
+                                if success_list:
+                                    saved_count = 0
+                                    for item in success_list:
+                                        record = item['record']
+                                        try:
+                                            save_to_db(pd.DataFrame([record]), DB_PATH)
+                                            saved_count += 1
+                                        except Exception as e:
+                                            st.error(f"❌ 保存 {item['model_name']} 失败: {e}")
+                                    st.success(f"✅ 成功重新获取并保存 {saved_count} 条记录到数据库！")
+
+                                # 显示结果
+                                st.markdown("#### 📊 重新获取结果")
+
+                                if success_list:
+                                    st.info(f"✅ 成功重新获取 {len(success_list)} 个模型")
+                                    success_df = pd.DataFrame(success_list)[['platform', 'model_name', 'old_count', 'new_count', 'change']]
+                                    success_df.columns = ['平台', '模型名称', '原下载量', '新下载量', '变化']
+                                    st.dataframe(success_df, use_container_width=True)
+
+                                if failed_list:
+                                    st.warning(f"⚠️ {len(failed_list)} 个模型获取失败")
+                                    failed_df = pd.DataFrame(failed_list)[['platform', 'model_name', 'publisher']]
+                                    failed_df.columns = ['平台', '模型名称', '发布者']
+                                    st.dataframe(failed_df, use_container_width=True)
+
+                                # 刷新页面以显示更新后的数据
+                                st.rerun()
+
+                            except Exception as e:
+                                st.error(f"❌ 重新获取过程中出错: {e}")
+                                import traceback
+                                st.error(traceback.format_exc())
+                        else:
+                            st.error("❌ 未找到 warnings_df，请重新生成周报")
+
+                st.markdown("---")
+
+            # 显示总体情况摘要
+            st.markdown("### 📝 总体情况摘要")
+            stats = report_data['summary_stats']
+
+            # 格式化数字
+            def format_num(n):
+                return f"{n/10000:.2f}万"
+
+            def format_percent(p):
+                return f"{p:.2%}"
+
+            # 计算百分比
+            official_total_percent = stats['official_current_total'] / stats['all_current_total'] if stats['all_current_total'] else 0
+            derivative_total_percent = stats['derivative_current_total'] / stats['all_current_total'] if stats['all_current_total'] else 0
+            official_growth_percent = stats['official_growth'] / stats['all_growth'] if stats['all_growth'] else 0
+            derivative_growth_percent = stats['derivative_growth'] / stats['all_growth'] if stats['all_growth'] else 0
+
+            summary_text = f"""
+            截至 **{saved_current_date}**，模型累计下载 **{format_num(stats['all_current_total'])}** 次
+            （含官方模型 **{format_num(stats['official_current_total'])}** 次，占比 **{format_percent(official_total_percent)}**，
+            衍生 **{format_num(stats['derivative_current_total'])}** 次，占比 **{format_percent(derivative_total_percent)}**），
+            较上周增长 **{format_num(stats['all_growth'])}** 次
+            （官方模型 **{format_num(stats['official_growth'])}** 次，占比 **{format_percent(official_growth_percent)}**，
+            衍生模型增长 **{format_num(stats['derivative_growth'])}** 次，占比 **{format_percent(derivative_growth_percent)}**）。
+            """
+            st.markdown(summary_text)
+
+            # 累计/本周新增衍生模型数量
+            new_models_list_count = len(tables.get('all_new_models', pd.DataFrame()))
+            st.info(
+                f"累计衍生模型：{int(stats.get('derivative_current_total_models', 0) or 0)} 个｜"
+                f"本周新增衍生（HF非官方差集）：{int(stats.get('derivative_new_models', 0) or 0)} 个｜"
+                f"新增列表展示：{new_models_list_count} 个"
+            )
+
+            # 社区和模型维度摘要
+            st.markdown("### 📈 社区与模型维度摘要")
+            community_summary = report_data['community_summary']
+
+            # 社区维度
+            community_text = f"""
+            - **社区维度**：Hugging Face下载量最高，**{community_summary['hf_top_model_name']}** 为本周HF平台下载最高模型，增长 **{community_summary['hf_top_model_growth']/10000:.2f}万** 次。
+            """
+            st.markdown(community_text)
+
+            # 模型维度
+            top3_downloads_str = " > ".join([f"{name}({int(val)})" for name, val in community_summary['top3_downloads_details'].items()])
+            top3_growth_str = " > ".join([f"{name}({int(val)})" for name, val in community_summary['top3_growth_details'].items()])
+
+            model_text = f"""
+            - **模型维度**：
+                - 模型（官方）下载总量前三位：{top3_downloads_str}
+                - 本周（官方）增长最快前三位：{top3_growth_str}
+            """
+            st.markdown(model_text)
+
+            # 显示汇总信息
+            st.markdown("### 📊 平台汇总")
+            st.dataframe(tables['platform_summary'], use_container_width=True)
+
+            # Top榜单
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("### 🏆 Top 5 增长最高的模型")
+                st.dataframe(tables['top5_growth'], use_container_width=True)
+
+            with col2:
+                st.markdown("### 🥇 Top 3 总下载量最高的模型")
+                st.dataframe(tables['top3_downloads'], use_container_width=True)
+
+            # 各平台榜首
+            st.markdown("### 🎯 各平台榜首模型")
+            st.dataframe(
+                tables['platform_top_models'],
+                use_container_width=True,
+                column_config={
+                    "下载量最高模型": st.column_config.TextColumn(
+                        "下载量最高模型",
                             help="各平台官方/衍生模型中，总下载量最高的模型",
                             width="large",
                         ),
@@ -1259,117 +1346,117 @@ elif page == "📊 ERNIE-4.5 分析":
                 )
 
                 # 详细数据表格
-                st.markdown("### 📋 各平台模型下载量详情 (总/周增)")
-                st.dataframe(tables['combined_downloads_growth'], use_container_width=True)
+            st.markdown("### 📋 各平台模型下载量详情 (总/周增)")
+            st.dataframe(tables['combined_downloads_growth'], use_container_width=True)
 
-                # 新增Finetune和Adapter模型展示
-                st.markdown("### 🌟 本周新增Finetune和Adapter模型")
+            # 新增Finetune和Adapter模型展示
+            st.markdown("### 🌟 本周新增Finetune和Adapter模型")
 
-                # 显示汇总信息
-                summary = tables.get('new_models_summary', '无新增模型信息')
-                st.info(f"📊 {summary}")
+            # 显示汇总信息
+            summary = tables.get('new_models_summary', '无新增模型信息')
+            st.info(f"📊 {summary}")
 
-                # 分列显示不同类型的新增模型
-                col1, col2, col3 = st.columns(3)
+            # 分列显示不同类型的新增模型
+            col1, col2, col3 = st.columns(3)
 
-                with col1:
-                    st.markdown("#### 🔧 新增Finetune模型")
-                    finetune_df = tables.get('new_finetune_models')
-                    if finetune_df is not None and not finetune_df.empty:
-                        st.dataframe(finetune_df, use_container_width=True)
-                    else:
-                        st.info("本周无新增Finetune模型")
+            with col1:
+                st.markdown("#### 🔧 新增Finetune模型")
+                finetune_df = tables.get('new_finetune_models')
+                if finetune_df is not None and not finetune_df.empty:
+                    st.dataframe(finetune_df, use_container_width=True)
+                else:
+                    st.info("本周无新增Finetune模型")
 
-                with col2:
-                    st.markdown("#### 🔌 新增Adapter模型")
-                    adapter_df = tables.get('new_adapter_models')
-                    if adapter_df is not None and not adapter_df.empty:
-                        st.dataframe(adapter_df, use_container_width=True)
-                    else:
-                        st.info("本周无新增Adapter模型")
+            with col2:
+                st.markdown("#### 🔌 新增Adapter模型")
+                adapter_df = tables.get('new_adapter_models')
+                if adapter_df is not None and not adapter_df.empty:
+                    st.dataframe(adapter_df, use_container_width=True)
+                else:
+                    st.info("本周无新增Adapter模型")
 
-                with col3:
-                    st.markdown("#### 🎯 新增LoRA模型")
-                    lora_df = tables.get('new_lora_models')
-                    if lora_df is not None and not lora_df.empty:
-                        st.dataframe(lora_df, use_container_width=True)
-                    else:
-                        st.info("本周无新增LoRA模型")
+            with col3:
+                st.markdown("#### 🎯 新增LoRA模型")
+                lora_df = tables.get('new_lora_models')
+                if lora_df is not None and not lora_df.empty:
+                    st.dataframe(lora_df, use_container_width=True)
+                else:
+                    st.info("本周无新增LoRA模型")
 
+            # 🆕 所有新增模型完整列表
+            st.markdown("### 📋 本周新增模型完整列表")
+
+            # 显示汇总信息
+            all_new_summary = tables.get('all_new_models_summary', '无新增模型')
+            st.info(f"📊 {all_new_summary}")
+
+            # 显示所有新增模型表格
+            all_new_df = tables.get('all_new_models')
+            if all_new_df is not None and not all_new_df.empty:
+                st.dataframe(all_new_df, use_container_width=True, height=400)
+            else:
+                st.info("本周没有新增ERNIE-4.5模型")
+
+            # 🆕 已删除/隐藏的模型列表
+            st.markdown("### 🗑️ 已删除/隐藏的衍生模型")
+            st.info("📌 这些模型在历史记录中存在，但在当前日期已不可见（可能被删除或隐藏）")
+
+            from ernie_tracker.analysis import get_deleted_or_hidden_models
+            deleted_models = get_deleted_or_hidden_models(current_date, model_series='ERNIE-4.5')
+
+            if deleted_models:
+                deleted_df = pd.DataFrame(deleted_models)
+                deleted_df.index = deleted_df.index + 1
+
+                # 重命名列
+                column_mapping = {
+                    'model_name': '模型名称',
+                    'publisher': '发布者',
+                    'repo': '平台',
+                    'model_type': '模型类型',
+                    'base_model': '基础模型',
+                    'last_seen_date': '最后出现日期',
+                    'last_download_count': '最后下载量'
+                }
+                deleted_df = deleted_df.rename(columns={k: v for k, v in column_mapping.items() if k in deleted_df.columns})
+
+                st.warning(f"⚠️ 发现 {len(deleted_models)} 个模型已被删除或隐藏")
+                st.dataframe(deleted_df, use_container_width=True, height=400)
+            else:
+                st.success("✅ 所有历史模型在当前日期仍然可见")
+
+            # 导出功能
+            st.markdown("### 💾 导出报表")
+
+            # 合并所有表格为一个Excel
+            from io import BytesIO
+
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                tables['platform_summary'].to_excel(writer, sheet_name='平台汇总')
+                tables['top5_growth'].to_excel(writer, sheet_name='Top5增长')
+                tables['top3_downloads'].to_excel(writer, sheet_name='Top3下载量')
+                tables['platform_top_models'].to_excel(writer, sheet_name='各平台榜首', index=False)
+                tables['combined_downloads_growth'].to_excel(writer, sheet_name='下载量详情')
+                # 新增模型表格
+                if not tables.get('new_finetune_models', pd.DataFrame()).empty:
+                    tables['new_finetune_models'].to_excel(writer, sheet_name='新增Finetune模型')
+                if not tables.get('new_adapter_models', pd.DataFrame()).empty:
+                    tables['new_adapter_models'].to_excel(writer, sheet_name='新增Adapter模型')
+                if not tables.get('new_lora_models', pd.DataFrame()).empty:
+                    tables['new_lora_models'].to_excel(writer, sheet_name='新增LoRA模型')
                 # 🆕 所有新增模型完整列表
-                st.markdown("### 📋 本周新增模型完整列表")
+                if not tables.get('all_new_models', pd.DataFrame()).empty:
+                    tables['all_new_models'].to_excel(writer, sheet_name='所有新增模型')
 
-                # 显示汇总信息
-                all_new_summary = tables.get('all_new_models_summary', '无新增模型')
-                st.info(f"📊 {all_new_summary}")
+            excel_data = output.getvalue()
 
-                # 显示所有新增模型表格
-                all_new_df = tables.get('all_new_models')
-                if all_new_df is not None and not all_new_df.empty:
-                    st.dataframe(all_new_df, use_container_width=True, height=400)
-                else:
-                    st.info("本周没有新增ERNIE-4.5模型")
-
-                # 🆕 已删除/隐藏的模型列表
-                st.markdown("### 🗑️ 已删除/隐藏的衍生模型")
-                st.info("📌 这些模型在历史记录中存在，但在当前日期已不可见（可能被删除或隐藏）")
-
-                from ernie_tracker.analysis import get_deleted_or_hidden_models
-                deleted_models = get_deleted_or_hidden_models(current_date, model_series='ERNIE-4.5')
-
-                if deleted_models:
-                    deleted_df = pd.DataFrame(deleted_models)
-                    deleted_df.index = deleted_df.index + 1
-
-                    # 重命名列
-                    column_mapping = {
-                        'model_name': '模型名称',
-                        'publisher': '发布者',
-                        'repo': '平台',
-                        'model_type': '模型类型',
-                        'base_model': '基础模型',
-                        'last_seen_date': '最后出现日期',
-                        'last_download_count': '最后下载量'
-                    }
-                    deleted_df = deleted_df.rename(columns={k: v for k, v in column_mapping.items() if k in deleted_df.columns})
-
-                    st.warning(f"⚠️ 发现 {len(deleted_models)} 个模型已被删除或隐藏")
-                    st.dataframe(deleted_df, use_container_width=True, height=400)
-                else:
-                    st.success("✅ 所有历史模型在当前日期仍然可见")
-
-                # 导出功能
-                st.markdown("### 💾 导出报表")
-
-                # 合并所有表格为一个Excel
-                from io import BytesIO
-
-                output = BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    tables['platform_summary'].to_excel(writer, sheet_name='平台汇总')
-                    tables['top5_growth'].to_excel(writer, sheet_name='Top5增长')
-                    tables['top3_downloads'].to_excel(writer, sheet_name='Top3下载量')
-                    tables['platform_top_models'].to_excel(writer, sheet_name='各平台榜首', index=False)
-                    tables['combined_downloads_growth'].to_excel(writer, sheet_name='下载量详情')
-                    # 新增模型表格
-                    if not tables.get('new_finetune_models', pd.DataFrame()).empty:
-                        tables['new_finetune_models'].to_excel(writer, sheet_name='新增Finetune模型')
-                    if not tables.get('new_adapter_models', pd.DataFrame()).empty:
-                        tables['new_adapter_models'].to_excel(writer, sheet_name='新增Adapter模型')
-                    if not tables.get('new_lora_models', pd.DataFrame()).empty:
-                        tables['new_lora_models'].to_excel(writer, sheet_name='新增LoRA模型')
-                    # 🆕 所有新增模型完整列表
-                    if not tables.get('all_new_models', pd.DataFrame()).empty:
-                        tables['all_new_models'].to_excel(writer, sheet_name='所有新增模型')
-
-                excel_data = output.getvalue()
-
-                st.download_button(
-                    label="📥 下载完整周报 (Excel)",
-                    data=excel_data,
-                    file_name=f"ERNIE-4.5_周报_{previous_date}_to_{current_date}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+            st.download_button(
+                label="📥 下载完整周报 (Excel)",
+                data=excel_data,
+                file_name=f"ERNIE-4.5_周报_{previous_date}_to_{current_date}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 # ================= PaddleOCR-VL 数据分析模块 =================
 elif page == "📊 PaddleOCR-VL 分析":
@@ -1422,12 +1509,122 @@ elif page == "📊 PaddleOCR-VL 分析":
 
                 st.success(f"✅ 周报生成成功！对比时间段：{previous_date} → {current_date}")
 
+                # 保存关键数据到session_state，用于重新获取功能
+                st.session_state['current_date'] = current_date
+                st.session_state['previous_date'] = previous_date
+
                 # 检查并显示负增长警告
                 warnings_df = tables.get('negative_growth_warnings')
                 if warnings_df is not None and not warnings_df.empty:
                     st.markdown("### ⚠️ 负增长警告")
                     st.error(f"检测到 {len(warnings_df)} 个模型出现负增长！这可能表示数据采集问题或模型被下架。")
                     st.dataframe(warnings_df, use_container_width=True)
+
+                    # 保存warnings_df到session_state
+                    st.session_state['warnings_df'] = warnings_df
+
+                    # 添加重新获取按钮
+                    with st.expander("🔄 重新获取负增长模型下载量", expanded=False):
+                        st.info("💡 此功能将重新从平台API获取这些模型的最新下载量并更新到数据库。目前支持 Hugging Face 和 ModelScope 平台。")
+
+                        if st.button("🚀 开始重新获取", type="primary", key="refetch_ernie"):
+                            # 从session_state获取warnings_df
+                            if 'warnings_df' in st.session_state:
+                                warnings_data = st.session_state['warnings_df']
+
+                                # 转换warnings_df为负增长模型列表
+                                negative_list = []
+                                for idx, row in warnings_data.iterrows():
+                                    negative_list.append({
+                                        'platform': row['平台'],
+                                        'model_name': row['模型名称'],
+                                        'publisher': row['发布者'],
+                                        'current': row['本周下载量']
+                                    })
+
+                                # 执行重新获取
+                                with st.spinner("正在重新获取模型下载量..."):
+                                    from ernie_tracker.fetchers.fetchers_single_model import refetch_models_batch
+                                    from ernie_tracker.db import save_to_db
+
+                                    success_list, failed_list, unsupported_list = refetch_models_batch(negative_list)
+
+                                    # 保存结果到session_state
+                                    st.session_state['refetch_success'] = success_list
+                                    st.session_state['refetch_failed'] = failed_list
+                                    st.session_state['refetch_unsupported'] = unsupported_list
+                                    st.session_state['refetch_done'] = True
+
+                                    # 重新运行页面以显示结果
+                                    st.rerun()
+
+                    # 显示重新获取结果（如果已执行）
+                    if st.session_state.get('refetch_done', False):
+                        st.markdown("#### 📊 重新获取结果")
+
+                        success_list = st.session_state.get('refetch_success', [])
+                        failed_list = st.session_state.get('refetch_failed', [])
+                        unsupported_list = st.session_state.get('refetch_unsupported', [])
+
+                        if success_list:
+                            st.success(f"✅ 成功重新获取 {len(success_list)} 个模型")
+                            success_df = pd.DataFrame(success_list)[['platform', 'model_name', 'old_count', 'new_count', 'change']]
+                            success_df.columns = ['平台', '模型名称', '原下载量', '新下载量', '变化']
+                            st.dataframe(success_df, use_container_width=True)
+
+                            # 保存到数据库
+                            if st.button("💾 保存更新到数据库", key="save_ernie"):
+                                saved_count = 0
+                                for item in success_list:
+                                    record = item['record']
+                                    try:
+                                        save_to_db(pd.DataFrame([record]), DB_PATH, DATA_TABLE)
+                                        saved_count += 1
+                                    except Exception as e:
+                                        st.error(f"保存 {item['model_name']} 失败: {e}")
+                                st.success(f"✅ 已保存 {saved_count} 条记录到数据库！")
+                                # 清除session_state
+                                st.session_state['refetch_done'] = False
+                                st.rerun()
+
+                        if failed_list:
+                            st.warning(f"⚠️ {len(failed_list)} 个模型获取失败")
+                            failed_df = pd.DataFrame(failed_list)[['platform', 'model_name', 'publisher']]
+                            failed_df.columns = ['平台', '模型名称', '发布者']
+                            st.dataframe(failed_df, use_container_width=True)
+
+                        if unsupported_list:
+                            st.info(f"ℹ️ {len(unsupported_list)} 个模型的平台暂不支持自动重新获取")
+                            unsupported_df = pd.DataFrame(unsupported_list)[['platform', 'model_name', 'publisher']]
+                            unsupported_df.columns = ['平台', '模型名称', '发布者']
+                            st.dataframe(unsupported_df, use_container_width=True)
+
+                            # 显示手动检查建议
+                            st.markdown("#### 🔍 手动检查建议")
+                            for item in unsupported_list:
+                                repo = item['platform']
+                                model_name = item['model_name']
+                                publisher = item['publisher']
+
+                                url = None
+                                if repo == "AI Studio":
+                                    # AI Studio模型URL需要根据实际情况构造
+                                    url = f"https://aistudio.baidu.com/modeldetail/{model_name}"
+                                elif repo == "GitCode":
+                                    from ernie_tracker.config import GITCODE_MODEL_LINKS
+                                    for link in GITCODE_MODEL_LINKS:
+                                        if model_name in link:
+                                            url = link
+                                            break
+
+                                if url:
+                                    st.markdown(f"- **{repo} | {model_name}**: [打开模型页面]({url})")
+
+                        # 清除按钮
+                        if st.button("🗑️ 清除结果", key="clear_ernie"):
+                            st.session_state['refetch_done'] = False
+                            st.rerun()
+
                     st.markdown("---")
 
                 # 显示总体情况摘要
