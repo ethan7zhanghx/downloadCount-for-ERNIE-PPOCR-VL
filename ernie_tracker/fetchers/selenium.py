@@ -228,9 +228,9 @@ class AIStudioFetcher(BaseFetcher):
 
                 self._log_debug(f"  [详情页 #{card_index}] 等待下载量元素出现")
                 element_wait_start = time.time()
+                # 使用更灵活的XPath：查找包含"使用量"的元素
                 element = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.XPATH,
-                        "//*[@id='main']/div[1]/div[2]/div/div/div[1]/div/div[1]/div[4]/div[2]"))
+                    EC.presence_of_element_located((By.XPATH, "//*[contains(text(), '使用量')]"))
                 )
                 self._log_debug(f"  [详情页 #{card_index}] 下载量元素已出现 (耗时: {(time.time() - element_wait_start)*1000:.2f}ms)")
 
