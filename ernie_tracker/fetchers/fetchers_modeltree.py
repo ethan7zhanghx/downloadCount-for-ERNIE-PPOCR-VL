@@ -2253,15 +2253,21 @@ def fetch_aistudio_model_tree(
 
                                 # 检查模型是否已有URL（在search阶段已获取过）
                                 model_key = f"{publisher}/{model_name}"
-                                should_fetch_url = model_key not in existing_models_with_url
+                                has_url = model_key in existing_models_with_url
+                                # 🔧 修复：即使已有URL，如果列表页是简化格式，仍需获取精确值
+                                needs_precise_count = fetcher._is_simplified_count(usage_count)
+                                should_fetch_url = not has_url or needs_precise_count
 
                                 if not should_fetch_url:
-                                    log(f"      ⏭️  跳过URL获取（已有URL）: {model_key}")
+                                    log(f"      ⏭️  跳过URL获取（已有URL且列表页为精确值）: {model_key}")
                                     skipped_url_count += 1
                                     model_url = None
                                 else:
-                                    # 复用AIStudioFetcher的_get_detailed_info方法获取URL
-                                    log(f"      🔍 获取URL: {model_key}")
+                                    # 复用AIStudioFetcher的_get_detailed_info方法获取URL和/或精确下载量
+                                    if has_url and needs_precise_count:
+                                        log(f"      🔍 获取精确下载量（已有URL）: {usage_count}")
+                                    elif not has_url:
+                                        log(f"      🔍 获取URL和精确下载量: {model_key}")
                                     detailed_count, model_url = fetcher._get_detailed_info(
                                         driver, card, idx, list_usage_count=usage_count
                                     )
