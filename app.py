@@ -3080,22 +3080,25 @@ elif page == "🌳 衍生模型生态":
 
                         st.info(f"📊 共 {len(filtered_derivatives)} 个衍生模型符合筛选条件")
 
-                        # 选择要显示的列
-                        display_cols = ['model_name', 'publisher', 'repo', 'download_count']
-                        if 'model_category' in filtered_derivatives.columns:
-                            display_cols.append('model_category')
-                        if 'model_type' in filtered_derivatives.columns:
-                            display_cols.append('model_type')
+                        # 定义所有可能的显示字段（按重要性排序）
+                        all_possible_cols = [
+                            'model_name', 'publisher', 'repo', 'download_count',
+                            'model_category', 'model_type', 'base_model',
+                            'tags', 'likes', 'data_source',
+                            'library_name', 'pipeline_tag',
+                            'created_at', 'last_modified', 'fetched_at',
+                            'base_model_from_api', 'search_keyword', 'url'
+                        ]
 
-                        # 确保所有列都存在
-                        display_cols = [col for col in display_cols if col in filtered_derivatives.columns]
+                        # 只显示存在的列
+                        display_cols = [col for col in all_possible_cols if col in filtered_derivatives.columns]
 
                         # 转换下载量为数值类型用于排序
                         filtered_derivatives['download_count_num'] = pd.to_numeric(
                             filtered_derivatives['download_count'], errors='coerce'
                         ).fillna(0)
 
-                        # 按下载量降序排序，显示所有模型
+                        # 按下载量降序排序，显示所有字段
                         display_df = filtered_derivatives.sort_values('download_count_num', ascending=False)[display_cols].reset_index(drop=True)
 
                         # 显示所有模型
@@ -3128,8 +3131,11 @@ elif page == "🌳 衍生模型生态":
                                 if analysis_result['by_series']:
                                     series_df.to_excel(writer, sheet_name='系列统计', index=False)
 
-                                # Sheet 4: 衍生模型列表
-                                export_df = derivative_models_df[display_cols].copy()
+                                # Sheet 4: 衍生模型列表（导出当前筛选结果，包含所有字段）
+                                export_df = display_df.copy()
+                                # 移除临时排序列
+                                if 'download_count_num' in export_df.columns:
+                                    export_df = export_df.drop(columns=['download_count_num'])
                                 export_df.to_excel(writer, sheet_name='衍生模型列表', index=False)
 
                             excel_data = output.getvalue()
