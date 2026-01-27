@@ -3080,14 +3080,21 @@ elif page == "🌳 衍生模型生态":
 
                         st.info(f"📊 共 {len(filtered_derivatives)} 个衍生模型符合筛选条件")
 
-                        # 定义所有可能的显示字段（按重要性排序）
+                        # 计算每个模型首次入库日期
+                        if 'date' in filtered_derivatives.columns:
+                            first_seen = filtered_derivatives.groupby(
+                                ['repo', 'publisher', 'model_name']
+                            )['date'].min().reset_index()
+                            first_seen.columns = ['repo', 'publisher', 'model_name', 'first_seen_date']
+                            filtered_derivatives = filtered_derivatives.merge(
+                                first_seen, on=['repo', 'publisher', 'model_name'], how='left'
+                            )
+
+                        # 定义显示字段（移除大量缺失的字段）
                         all_possible_cols = [
                             'model_name', 'publisher', 'repo', 'download_count',
                             'model_category', 'model_type', 'base_model',
-                            'tags', 'likes', 'data_source',
-                            'library_name', 'pipeline_tag',
-                            'created_at', 'last_modified', 'fetched_at',
-                            'base_model_from_api', 'search_keyword', 'url'
+                            'data_source', 'url', 'first_seen_date'
                         ]
 
                         # 只显示存在的列
