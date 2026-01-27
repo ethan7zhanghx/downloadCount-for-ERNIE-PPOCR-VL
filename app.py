@@ -3080,38 +3080,24 @@ elif page == "🌳 衍生模型生态":
 
                         st.info(f"📊 共 {len(filtered_derivatives)} 个衍生模型符合筛选条件")
 
-                        # 从数据库获取每个模型的首次入库日期（使用原始数据，不是回填后的）
-                        from ernie_tracker.db import DB_PATH, DATA_TABLE
-                        import sqlite3
+                        # 从数据库获取每个模型的首次入库日期（一次性查询所有模型）
+                        from ernie_tracker.db import load_data_from_db
 
-                        # 获取当前筛选结果中的模型唯一标识
-                        if not filtered_derivatives.empty:
-                            model_keys = filtered_derivatives[['repo', 'publisher', 'model_name']].drop_duplicates()
+                        # 加载原始数据（不使用 last_value_per_model，获取所有历史记录）
+                        raw_df = load_data_from_db(last_value_per_model=False)
 
-                            # 构建 SQL 查询，获取每个模型首次出现的日期
-                            first_seen_dates = {}
-                            conn = sqlite3.connect(DB_PATH)
-                            for _, row in model_keys.iterrows():
-                                repo = row['repo']
-                                publisher = row['publisher']
-                                model_name = row['model_name']
+                        if not raw_df.empty and not filtered_derivatives.empty:
+                            # 按模型分组，获取首次出现的日期
+                            first_seen_df = raw_df.groupby(
+                                ['repo', 'publisher', 'model_name']
+                            )['date'].min().reset_index()
+                            first_seen_df.columns = ['repo', 'publisher', 'model_name', 'first_seen_date']
 
-                                # 查询该模型在数据库中最早出现的日期
-                                query = f"""
-                                SELECT MIN(date) as first_date
-                                FROM {DATA_TABLE}
-                                WHERE repo = ? AND publisher = ? AND model_name = ?
-                                """
-                                cursor = conn.execute(query, (repo, publisher, model_name))
-                                result = cursor.fetchone()
-                                if result and result[0]:
-                                    first_seen_dates[(repo, publisher, model_name)] = result[0]
-                            conn.close()
-
-                            # 添加首次入库日期列
-                            filtered_derivatives['first_seen_date'] = filtered_derivatives.apply(
-                                lambda row: first_seen_dates.get((row['repo'], row['publisher'], row['model_name']), ''),
-                                axis=1
+                            # 合并首次入库日期
+                            filtered_derivatives = filtered_derivatives.merge(
+                                first_seen_df,
+                                on=['repo', 'publisher', 'model_name'],
+                                how='left'
                             )
 
                         # 定义显示字段（移除大量缺失的字段）
