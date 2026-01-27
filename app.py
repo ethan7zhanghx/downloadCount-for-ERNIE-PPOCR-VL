@@ -3082,11 +3082,20 @@ elif page == "🌳 衍生模型生态":
 
                         # 从数据库获取每个模型的首次入库日期（一次性查询所有模型）
                         from ernie_tracker.db import load_data_from_db
+                        from ernie_tracker.analysis import normalize_model_names
 
                         # 加载原始数据（不使用 last_value_per_model，获取所有历史记录）
                         raw_df = load_data_from_db(last_value_per_model=False)
 
                         if not raw_df.empty and not filtered_derivatives.empty:
+                            # 对 raw_df 做和 analyze_derivative_models_all_platforms 一样的标准化处理
+                            # 1. 标准化 publisher 名称
+                            raw_df['publisher'] = raw_df['publisher'].astype(str).apply(
+                                lambda x: x.title() if x.lower() != 'nan' else x
+                            )
+                            # 2. 标准化模型名称（移除 publisher 前缀）
+                            raw_df = normalize_model_names(raw_df)
+
                             # 按模型分组，获取首次出现的日期
                             first_seen_df = raw_df.groupby(
                                 ['repo', 'publisher', 'model_name']
