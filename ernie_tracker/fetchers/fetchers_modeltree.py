@@ -3,7 +3,7 @@ Model Tree 功能模块 - 获取官方模型的衍生模型
 支持获取 Finetune 和 Adapter 模型，并智能分类
 """
 from huggingface_hub import list_models, model_info
-from datetime import date
+from datetime import date, datetime
 import pandas as pd
 import time
 import re
@@ -613,7 +613,7 @@ def get_all_ernie_derivatives(include_paddleocr: bool = True) -> Tuple[pd.DataFr
             'pipeline_tag': detail.get('pipeline_tag'),
             'created_at': detail.get('created_at'),
             'last_modified': detail.get('last_modified'),
-            'fetched_at': date.today().isoformat(),
+            'fetched_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'base_model_from_api': detail.get('base_model_from_api'),
             'url': f"https://huggingface.co/{model_id}"  # 模型详情页URL
         }
@@ -1745,7 +1745,7 @@ def get_all_modelscope_derivatives(
                             'pipeline_tag': deriv.get('pipeline_tag'),
                             'created_at': deriv.get('created_at'),
                             'last_modified': deriv.get('last_modified'),
-                            'fetched_at': date.today().isoformat(),
+                            'fetched_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                             'base_model_from_api': deriv['base_model'],
                             'search_keyword': deriv['base_model']
                         }

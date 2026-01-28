@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 import sqlite3
 import re
-from datetime import date
+from datetime import date, datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -128,7 +128,7 @@ def fetch_hugging_face_data_unified(progress_callback=None, progress_total=None,
                                 "search_keyword": search_term,  # 记录搜索关键词
                                 "created_at": getattr(info, 'created_at', None),
                                 "last_modified": getattr(info, 'last_modified', None),
-                                "fetched_at": date.today().isoformat(),
+                                "fetched_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                                 "url": f"https://huggingface.co/{m.id}"  # 模型详情页URL
                             }
                             search_results.append(model_data)

@@ -2,7 +2,7 @@
 爬虫基类和具体实现
 """
 from abc import ABC, abstractmethod
-from datetime import date
+from datetime import date, datetime
 import pandas as pd
 from ..config import SEARCH_QUERY
 
@@ -13,6 +13,7 @@ class BaseFetcher(ABC):
     def __init__(self, platform_name):
         self.platform_name = platform_name
         self.today = date.today().isoformat()
+        self.fetched_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         self.results = []
 
     @abstractmethod
@@ -51,7 +52,8 @@ class BaseFetcher(ABC):
             "repo": self.platform_name,
             "model_name": model_name,
             "publisher": publisher,
-            "download_count": download_count
+            "download_count": download_count,
+            "fetched_at": self.fetched_at  # 入库时间(日期时间)
         }
         if search_keyword:
             record["search_keyword"] = search_keyword
@@ -75,7 +77,7 @@ class BaseFetcher(ABC):
 
         # 确保基础列在前
         base_columns = ["date", "repo", "model_name", "publisher", "download_count"]
-        optional_columns = ["search_keyword", "created_at", "last_modified", "url"]
+        optional_columns = ["fetched_at", "search_keyword", "created_at", "last_modified", "url"]
         ordered_columns = base_columns + [col for col in optional_columns if col in all_columns]
 
         # 添加其他可能出现的列
