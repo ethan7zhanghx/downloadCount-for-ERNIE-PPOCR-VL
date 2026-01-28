@@ -245,8 +245,17 @@ def get_model_tree_children(base_model_id: str, max_depth: int = 1) -> List[Dict
             related_models = []
             for deriv in derivatives:
                 try:
-                    # 获取详细信息（包括下载量） - 必须使用 expand 参数
+                    # 第一次调用：不带expand，获取created_at等基础字段
+                    deriv_basic = model_info(deriv.id)
+
+                    # 第二次调用：带expand，获取downloadsAllTime
                     deriv_info = model_info(deriv.id, expand=["downloadsAllTime"])
+
+                    # 将created_at从basic对象复制到expand对象
+                    if hasattr(deriv_basic, 'created_at') and not getattr(deriv_info, 'created_at', None):
+                        deriv_info.created_at = deriv_basic.created_at
+                    if hasattr(deriv_basic, 'last_modified') and not getattr(deriv_info, 'last_modified', None):
+                        deriv_info.last_modified = deriv_basic.last_modified
 
                     # 获取下载量 - 优先使用 downloads_all_time，回退到 downloads
                     downloads = getattr(deriv_info, 'downloads_all_time', None) or getattr(deriv_info, 'downloads', 0) or 0
@@ -475,7 +484,23 @@ def get_all_ernie_derivatives(include_paddleocr: bool = True) -> Tuple[pd.DataFr
 
     def fetch_model_detail(model_id, model_obj=None):
         try:
+            # 第一次调用：不带expand，获取created_at等基础字段
+            info_basic = model_info(model_id)
+
+            # 第二次调用：带expand，获取downloadsAllTime
             info = model_info(model_id, expand=["downloadsAllTime"])
+
+            # 将created_at从basic对象复制到expand对象
+            if hasattr(info_basic, 'created_at') and not getattr(info, 'created_at', None):
+                info.created_at = info_basic.created_at
+            if hasattr(info_basic, 'last_modified') and not getattr(info, 'last_modified', None):
+                info.last_modified = info_basic.last_modified
+
+            # 调试：检查created_at是否成功复制
+            if model_id == 'baidu/ERNIE-4.5-0.3B-PT':
+                print(f"  调试 {model_id}:")
+                print(f"    - created_at (after copy): {getattr(info, 'created_at', None)}")
+                print(f"    - downloads_all_time: {getattr(info, 'downloads_all_time', None)}")
         except Exception as e:
             print(f"  ⚠️ 获取 {model_id} 详情失败: {e}")
             return None

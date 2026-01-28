@@ -91,7 +91,17 @@ def fetch_hugging_face_data_unified(progress_callback=None, progress_total=None,
 
                     for i, m in enumerate(term_models):
                         try:
+                            # 第一次调用：不带expand，获取created_at等基础字段
+                            info_basic = model_info(m.id)
+
+                            # 第二次调用：带expand，获取downloadsAllTime
                             info = model_info(m.id, expand=["downloadsAllTime"])
+
+                            # 将created_at从basic对象复制到expand对象
+                            if hasattr(info_basic, 'created_at') and not getattr(info, 'created_at', None):
+                                info.created_at = info_basic.created_at
+                            if hasattr(info_basic, 'last_modified') and not getattr(info, 'last_modified', None):
+                                info.last_modified = info_basic.last_modified
 
                             # 直接获取下载量并添加调试信息
                             downloads = getattr(info, 'downloads_all_time', 0)
@@ -101,7 +111,7 @@ def fetch_hugging_face_data_unified(progress_callback=None, progress_total=None,
                                 print(f"  调试 {m.id}:")
                                 print(f"    - downloads_all_time: {downloads}")
                                 print(f"    - downloads (fallback): {getattr(info, 'downloads', 'N/A')}")
-                                print(f"    - info对象属性: {[attr for attr in dir(info) if 'download' in attr.lower()]}")
+                                print(f"    - created_at: {getattr(info, 'created_at', 'N/A')}")
 
                             model_data = {
                                 "date": date.today().isoformat(),
@@ -116,6 +126,9 @@ def fetch_hugging_face_data_unified(progress_callback=None, progress_total=None,
                                 "base_model": None,
                                 "data_source": 'search',  # 标记为传统搜索模式
                                 "search_keyword": search_term,  # 记录搜索关键词
+                                "created_at": getattr(info, 'created_at', None),
+                                "last_modified": getattr(info, 'last_modified', None),
+                                "fetched_at": date.today().isoformat(),
                                 "url": f"https://huggingface.co/{m.id}"  # 模型详情页URL
                             }
                             search_results.append(model_data)

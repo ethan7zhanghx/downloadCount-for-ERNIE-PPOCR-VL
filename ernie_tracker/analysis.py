@@ -600,7 +600,7 @@ def calculate_weekly_report(current_date=None, previous_date=None, model_order=N
         previous_dt = pd.to_datetime(previous_date)
 
         def peak_total_by_type(df, cutoff_dt, is_official):
-            """统计官方或衍生模型的历史峰值总和（统一逻辑）"""
+            """统计衍生模型的历史峰值总和"""
             subset = df[(df['is_official'] == is_official) & (df['date'] <= cutoff_dt)]
             if subset.empty:
                 return 0
@@ -608,7 +608,7 @@ def calculate_weekly_report(current_date=None, previous_date=None, model_order=N
             return peak_per_combo.sum()
 
         def peak_total_by_platform(df, cutoff_dt, is_official):
-            """统计官方或衍生模型按平台的历史峰值"""
+            """统计衍生模型按平台的历史峰值"""
             subset = df[(df['is_official'] == is_official) & (df['date'] <= cutoff_dt)]
             if subset.empty:
                 return pd.Series()
@@ -618,27 +618,34 @@ def calculate_weekly_report(current_date=None, previous_date=None, model_order=N
             return platform_totals
 
         # ========== 总体情况摘要 ==========
-        official_current_total = peak_total_by_type(full_data, current_dt, is_official=True)
-        official_previous_total = peak_total_by_type(full_data, previous_dt, is_official=True)
+        # 官方模型：使用当日值
+        official_current_total = official_data[official_data['date'] == current_date]['download_count'].sum()
+        official_previous_total = official_data[official_data['date'] == previous_date]['download_count'].sum()
         official_growth = official_current_total - official_previous_total
 
+        # 衍生模型：使用历史峰值
         derivative_current_total = peak_total_by_type(full_data, current_dt, is_official=False)
         derivative_previous_total = peak_total_by_type(full_data, previous_dt, is_official=False)
         derivative_growth = derivative_current_total - derivative_previous_total
 
-        # 汇总总数（官方+衍生，都用历史峰值）
+        # 汇总总数（官方=当日值，衍生=历史峰值）
         all_current_total = official_current_total + derivative_current_total
         all_previous_total = official_previous_total + derivative_previous_total
         all_growth = all_current_total - all_previous_total
 
-        # ========== 平台汇总（使用相同的逻辑） ==========
-        # 分别统计官方和衍生模型的历史峰值
-        current_official_platforms = peak_total_by_platform(full_data, current_dt, is_official=True)
-        current_derivative_platforms = peak_total_by_platform(full_data, current_dt, is_official=False)
-        current_platform_totals = current_official_platforms.add(current_derivative_platforms, fill_value=0)
+        # ========== 平台汇总（官方用当日值，衍生用历史峰值） ==========
+        # 官方模型：使用当日值按平台统计
+        current_official_data_by_date = official_data[official_data['date'] == current_date]
+        previous_official_data_by_date = official_data[official_data['date'] == previous_date]
+        current_official_platforms = current_official_data_by_date.groupby('repo')['download_count'].sum()
+        previous_official_platforms = previous_official_data_by_date.groupby('repo')['download_count'].sum()
 
-        previous_official_platforms = peak_total_by_platform(full_data, previous_dt, is_official=True)
+        # 衍生模型：使用历史峰值按平台统计
+        current_derivative_platforms = peak_total_by_platform(full_data, current_dt, is_official=False)
         previous_derivative_platforms = peak_total_by_platform(full_data, previous_dt, is_official=False)
+
+        # 合并官方和衍生模型
+        current_platform_totals = current_official_platforms.add(current_derivative_platforms, fill_value=0)
         previous_platform_totals = previous_official_platforms.add(previous_derivative_platforms, fill_value=0)
 
         # 为了在平台汇总中显示"其他"的汇总数据，需要将 Gitee, Modelers, 鲸智合并为"其他"
