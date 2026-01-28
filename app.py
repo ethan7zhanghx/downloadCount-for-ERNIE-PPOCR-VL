@@ -1849,14 +1849,15 @@ elif page == "🗄️ 数据库管理":
     st.info("💡 提供数据库备份、恢复、删除、优化等管理功能")
 
     # 创建标签页
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "📊 数据库概览",
         "💾 备份与恢复",
         "🗑️ 数据删除",
         "🔧 数据维护",
         "📤 数据导出",
         "📝 数据录入",
-        "✏️ 数据编辑"
+        "✏️ 数据编辑",
+        "📋 白名单模型"
     ])
     
     # ========== Tab 1: 数据库概览 ==========
@@ -2691,6 +2692,218 @@ elif page == "🗄️ 数据库管理":
                                 else:
                                     st.warning("⚠️ 确认删除？请再次点击确认！")
                                     st.session_state["confirm_delete_edit"] = True
+
+    # ========== Tab 8: 白名单模型 ==========
+    with tab8:
+        from ernie_tracker.db import get_custom_models, remove_custom_model, add_custom_model_with_info, add_custom_model
+
+        st.markdown("### 📋 白名单模型管理")
+        st.info("💡 添加需要持续跟踪的模型URL，每次数据更新时会自动抓取这些模型的最新数据")
+
+        # ===== 添加新模型 =====
+        st.markdown("#### ➕ 添加模型到白名单")
+
+        # 平台选择
+        whitelist_platform = st.selectbox(
+            "选择平台 *",
+            options=["Hugging Face", "ModelScope", "AI Studio", "GitCode"],
+            key="whitelist_platform",
+            help="选择模型所在的平台"
+        )
+
+        # 根据平台显示不同的输入字段
+        if whitelist_platform == "AI Studio":
+            st.warning("⚠️ AI Studio 无法从URL自动解析模型信息，请手动填写以下字段")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                aistudio_url = st.text_input(
+                    "模型URL *",
+                    placeholder="https://aistudio.baidu.com/modelsdetail/xxx/intro",
+                    help="AI Studio 模型详情页的完整URL",
+                    key="aistudio_url"
+                )
+
+            with col2:
+                aistudio_model_name = st.text_input(
+                    "模型名称 *",
+                    placeholder="如：ERNIE-4.5-VL-28B-Chat",
+                    help="模型的名称",
+                    key="aistudio_model_name"
+                )
+
+            aistudio_publisher = st.text_input(
+                "发布者 *",
+                placeholder="如：baidu",
+                help="模型的发布者/作者",
+                key="aistudio_publisher"
+            )
+
+            # 添加按钮
+            col_btn1, col_btn2 = st.columns([3, 1])
+            with col_btn2:
+                if st.button("➕ 添加到白名单", type="primary", use_container_width=True, key="add_aistudio"):
+                    if not aistudio_url or not aistudio_model_name or not aistudio_publisher:
+                        st.error("❌ 请填写所有必填字段")
+                    elif 'aistudio.baidu.com' not in aistudio_url:
+                        st.error("❌ 请输入有效的 AI Studio URL")
+                    else:
+                        result = add_custom_model_with_info(
+                            url=aistudio_url,
+                            platform="AI Studio",
+                            model_name=aistudio_model_name,
+                            publisher=aistudio_publisher
+                        )
+                        if result['success']:
+                            st.success(f"✅ {result['message']}")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {result['message']}")
+
+        else:
+            # HuggingFace / ModelScope / GitCode - 从URL自动解析
+            url_placeholder = {
+                "Hugging Face": "https://huggingface.co/publisher/model-name",
+                "ModelScope": "https://modelscope.cn/models/publisher/model-name",
+                "GitCode": "https://gitcode.com/publisher/model-name"
+            }
+
+            model_url = st.text_input(
+                "模型URL *",
+                placeholder=url_placeholder.get(whitelist_platform, ""),
+                help=f"输入 {whitelist_platform} 模型的完整URL",
+                key="whitelist_url"
+            )
+
+            # 添加按钮
+            col_btn1, col_btn2 = st.columns([3, 1])
+            with col_btn2:
+                if st.button("➕ 添加到白名单", type="primary", use_container_width=True, key="add_whitelist"):
+                    if not model_url:
+                        st.error("❌ 请输入模型URL")
+                    else:
+                        # 验证URL与选择的平台是否匹配
+                        platform_domains = {
+                            "Hugging Face": "huggingface.co",
+                            "ModelScope": "modelscope.cn",
+                            "GitCode": "gitcode.com"
+                        }
+                        expected_domain = platform_domains.get(whitelist_platform)
+                        if expected_domain and expected_domain not in model_url:
+                            st.error(f"❌ URL与选择的平台不匹配，请输入 {whitelist_platform} 的URL")
+                        else:
+                            result = add_custom_model(model_url)
+                            if result['success']:
+                                st.success(f"✅ {result['message']} - 平台: {result['platform']}, 模型: {result['model_id']}")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {result['message']}")
+
+        st.markdown("---")
+
+        # ===== 白名单列表 =====
+        st.markdown("#### 📋 当前白名单")
+
+        custom_models = get_custom_models()
+
+        if not custom_models:
+            st.info("白名单为空，请添加需要跟踪的模型")
+        else:
+            st.success(f"共 {len(custom_models)} 个模型在白名单中")
+
+            # 创建表格数据
+            whitelist_df = pd.DataFrame(custom_models)
+            # 统一使用 model_name 作为模型名称显示
+            whitelist_df['模型名称'] = whitelist_df.apply(
+                lambda row: row['model_name'] if row['model_name'] else row['model_id'],
+                axis=1
+            )
+            whitelist_df = whitelist_df.rename(columns={
+                'id': 'ID',
+                'platform': '平台',
+                'publisher': '发布者',
+                'added_at': '添加时间'
+            })
+
+            # 显示表格
+            st.dataframe(
+                whitelist_df[['ID', '平台', '发布者', '模型名称', '添加时间']],
+                use_container_width=True,
+                height=300
+            )
+
+            # 删除功能
+            st.markdown("##### 🗑️ 删除模型")
+            col1, col2, col3 = st.columns([2, 2, 1])
+
+            with col1:
+                # 生成显示名称的辅助函数
+                def get_model_display_name(model):
+                    name = model['model_name'] if model['model_name'] else model['model_id']
+                    return f"{model['platform']} - {name}"
+
+                delete_id = st.selectbox(
+                    "选择要删除的模型",
+                    options=[m['id'] for m in custom_models],
+                    format_func=lambda x: next((get_model_display_name(m) for m in custom_models if m['id'] == x), str(x)),
+                    key="delete_whitelist_id"
+                )
+
+            with col3:
+                st.write("")
+                st.write("")
+                if st.button("🗑️ 删除", use_container_width=True, key="delete_whitelist"):
+                    if st.session_state.get("confirm_delete_whitelist", False):
+                        success = remove_custom_model(delete_id)
+                        if success:
+                            st.success("✅ 删除成功")
+                            st.session_state["confirm_delete_whitelist"] = False
+                            st.rerun()
+                        else:
+                            st.error("❌ 删除失败")
+                            st.session_state["confirm_delete_whitelist"] = False
+                    else:
+                        st.warning("⚠️ 确认删除？请再次点击")
+                        st.session_state["confirm_delete_whitelist"] = True
+
+        st.markdown("---")
+
+        # ===== 手动抓取 =====
+        st.markdown("#### 🔄 手动抓取白名单模型数据")
+        st.info("💡 白名单模型的数据会在「数据更新」页面自动抓取，也可以在这里手动触发")
+
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            if st.button("🚀 立即抓取", type="primary", use_container_width=True, key="fetch_whitelist"):
+                if not custom_models:
+                    st.warning("⚠️ 白名单为空，请先添加模型")
+                else:
+                    from ernie_tracker.fetchers.fetchers_single_model import fetch_custom_models
+                    from ernie_tracker.db import save_to_db
+
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+
+                    def update_progress(current, total, message=""):
+                        if total > 0:
+                            progress_bar.progress(current / total)
+                        status_text.text(f"正在抓取... {current}/{total} {message}")
+
+                    with st.spinner("正在抓取白名单模型数据..."):
+                        df, count = fetch_custom_models(progress_callback=update_progress)
+
+                    progress_bar.progress(1.0)
+
+                    if df is not None and not df.empty:
+                        save_to_db(df)
+                        st.success(f"✅ 抓取完成！成功获取 {count} 个模型的数据")
+
+                        # 显示抓取结果
+                        with st.expander("📊 抓取结果详情"):
+                            display_cols = ['date', 'repo', 'model_name', 'publisher', 'download_count']
+                            st.dataframe(df[display_cols], use_container_width=True)
+                    else:
+                        st.warning("⚠️ 未能获取到任何数据，请检查模型URL是否有效")
 
 
 # ================= 衍生模型生态分析模块 =================

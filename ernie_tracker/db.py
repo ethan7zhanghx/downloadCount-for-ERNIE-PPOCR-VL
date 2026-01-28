@@ -1,8 +1,10 @@
 """数据库操作模块"""
 import sqlite3
 import pandas as pd
-from datetime import date
+from datetime import date, datetime
 from .config import DB_PATH, DATA_TABLE, STATS_TABLE
+
+CUSTOM_MODELS_TABLE = "custom_models"
 
 
 def init_database():
@@ -75,6 +77,32 @@ def init_database():
             last_updated TEXT
         )
     """)
+
+    # 创建自定义模型表（手动添加的模型白名单）
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS {CUSTOM_MODELS_TABLE} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            added_at TEXT NOT NULL,
+            publisher TEXT,
+            model_name TEXT
+        )
+    """)
+
+    # 检查并添加 custom_models 表的新列
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"PRAGMA table_info({CUSTOM_MODELS_TABLE})")
+        custom_columns = [column[1] for column in cursor.fetchall()]
+
+        if 'publisher' not in custom_columns:
+            conn.execute(f"ALTER TABLE {CUSTOM_MODELS_TABLE} ADD COLUMN publisher TEXT")
+        if 'model_name' not in custom_columns:
+            conn.execute(f"ALTER TABLE {CUSTOM_MODELS_TABLE} ADD COLUMN model_name TEXT")
+    except Exception as e:
+        print(f"更新 custom_models 表结构时出错: {e}")
 
     conn.commit()
     conn.close()
@@ -282,3 +310,198 @@ def load_data_from_db(date_filter=None, platform_filter=None, last_value_per_mod
         import traceback
         traceback.print_exc()
         return pd.DataFrame()
+
+
+# ========== 自定义模型管理 ==========
+
+def parse_model_url(url):
+    """
+    解析模型URL，提取平台和模型ID
+
+    支持的URL格式：
+    - Hugging Face: https://huggingface.co/{publisher}/{model_name}
+    - ModelScope: https://modelscope.cn/models/{publisher}/{model_name}
+    - AI Studio: https://aistudio.baidu.com/modelsdetail/{model_id} 或
+                 https://aistudio.baidu.com/modeldetail/{model_id}
+    - GitCode: https://gitcode.com/{publisher}/{model_name}
+
+    Returns:
+        tuple: (platform, model_id) 或 (None, None) 如果无法解析
+    """
+    import re
+
+    url = url.strip()
+
+    # Hugging Face
+    if 'huggingface.co/' in url:
+        match = re.search(r'huggingface\.co/([^/]+)/([^/]+)', url)
+        if match:
+            publisher, model_name = match.groups()
+            return 'Hugging Face', f"{publisher}/{model_name}"
+
+    # ModelScope
+    elif 'modelscope.cn/models/' in url:
+        match = re.search(r'modelscope\.cn/models/([^/]+)/([^/]+)', url)
+        if match:
+            publisher, model_name = match.groups()
+            return 'ModelScope', f"{publisher}/{model_name}"
+
+    # AI Studio (支持 modelsdetail 和 modeldetail 两种格式)
+    elif 'aistudio.baidu.com/' in url and ('modelsdetail/' in url or 'modeldetail/' in url):
+        # AI Studio URL 格式: https://aistudio.baidu.com/modelsdetail/{id}/intro
+        # 无法从 URL 直接解析 publisher/model_name，需要在 fetch 时从页面获取
+        return 'AI Studio', url
+
+    # GitCode
+    elif 'gitcode.com/' in url:
+        match = re.search(r'gitcode\.com/([^/]+)/([^/]+)', url)
+        if match:
+            publisher, model_name = match.groups()
+            return 'GitCode', f"{publisher}/{model_name}"
+
+    return None, None
+
+
+def add_custom_model(url):
+    """
+    添加自定义模型到跟踪列表
+
+    Args:
+        url: 模型URL
+
+    Returns:
+        dict: {'success': bool, 'message': str, 'id': int}
+    """
+    init_database()
+    platform, model_id = parse_model_url(url)
+
+    if not platform:
+        return {'success': False, 'message': f'无法解析URL: {url}'}
+
+    # 从 model_id 中解析 publisher 和 model_name（适用于 HF/ModelScope 格式）
+    publisher = None
+    model_name = None
+    if '/' in model_id and platform != 'AI Studio':
+        parts = model_id.split('/', 1)
+        if len(parts) == 2:
+            publisher, model_name = parts
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    # 检查是否已存在
+    cursor.execute(f"SELECT id FROM {CUSTOM_MODELS_TABLE} WHERE url=?", (url,))
+    if cursor.fetchone():
+        conn.close()
+        return {'success': False, 'message': '该模型已存在'}
+
+    # 插入新记录
+    cursor.execute(f"""
+        INSERT INTO {CUSTOM_MODELS_TABLE} (platform, model_id, url, added_at, publisher, model_name)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (platform, model_id, url, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), publisher, model_name))
+
+    new_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    return {'success': True, 'message': '添加成功', 'id': new_id, 'platform': platform, 'model_id': model_id}
+
+
+def remove_custom_model(model_id):
+    """
+    从跟踪列表中删除自定义模型
+
+    Args:
+        model_id: 数据库中的ID
+
+    Returns:
+        bool: 是否删除成功
+    """
+    init_database()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute(f"DELETE FROM {CUSTOM_MODELS_TABLE} WHERE id=?", (model_id,))
+    affected = cursor.rowcount
+
+    conn.commit()
+    conn.close()
+
+    return affected > 0
+
+
+def get_custom_models():
+    """
+    获取所有自定义模型列表
+
+    Returns:
+        list: 字典列表，每个包含 id, platform, model_id, url, added_at, publisher, model_name
+    """
+    init_database()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute(f"""
+        SELECT id, platform, model_id, url, added_at, publisher, model_name
+        FROM {CUSTOM_MODELS_TABLE}
+        ORDER BY added_at DESC
+    """)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [
+        {
+            'id': row[0],
+            'platform': row[1],
+            'model_id': row[2],
+            'url': row[3],
+            'added_at': row[4],
+            'publisher': row[5],
+            'model_name': row[6]
+        }
+        for row in rows
+    ]
+
+
+def add_custom_model_with_info(url, platform, model_name, publisher):
+    """
+    添加自定义模型到跟踪列表（支持手动指定模型信息）
+
+    主要用于 AI Studio 等无法从 URL 自动解析模型信息的平台
+
+    Args:
+        url: 模型URL
+        platform: 平台名称
+        model_name: 模型名称
+        publisher: 发布者
+
+    Returns:
+        dict: {'success': bool, 'message': str, 'id': int}
+    """
+    init_database()
+
+    # 生成 model_id
+    model_id = f"{publisher}/{model_name}"
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    # 检查是否已存在
+    cursor.execute(f"SELECT id FROM {CUSTOM_MODELS_TABLE} WHERE url=?", (url,))
+    if cursor.fetchone():
+        conn.close()
+        return {'success': False, 'message': '该模型已存在'}
+
+    # 插入新记录
+    cursor.execute(f"""
+        INSERT INTO {CUSTOM_MODELS_TABLE} (platform, model_id, url, added_at, publisher, model_name)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (platform, model_id, url, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), publisher, model_name))
+
+    new_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    return {'success': True, 'message': '添加成功', 'id': new_id, 'platform': platform, 'model_id': model_id}

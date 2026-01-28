@@ -2,7 +2,8 @@
 单个模型重新获取模块
 复用现有fetcher的create_record方法和逻辑
 """
-from datetime import date
+from datetime import date, datetime
+import sqlite3
 import pandas as pd
 from huggingface_hub import model_info
 from modelscope.hub.api import HubApi
@@ -21,6 +22,7 @@ class SingleModelFetcher:
     def __init__(self, platform_name, target_date=None):
         self.platform_name = platform_name
         self.target_date = target_date if target_date else date.today().isoformat()
+        self.fetched_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     def create_record(self, model_name, publisher, download_count, search_keyword=None,
                      created_at=None, last_modified=None, url=None):
@@ -32,7 +34,8 @@ class SingleModelFetcher:
             "repo": self.platform_name,
             "model_name": model_name,
             "publisher": publisher,
-            "download_count": download_count
+            "download_count": download_count,
+            "fetched_at": self.fetched_at  # 入库时间戳
         }
         if search_keyword:
             record["search_keyword"] = search_keyword
@@ -328,3 +331,134 @@ def refetch_models_batch(negative_growth_list, target_date=None):
             failed_list.append(item)
 
     return success_list, failed_list
+
+
+# ========== 自定义模型批量获取 ==========
+
+def fetch_custom_models(target_date=None, progress_callback=None):
+    """
+    获取所有自定义模型的数据
+
+    Args:
+        target_date: 保存到数据库的日期，默认为今天
+        progress_callback: 进度回调函数
+
+    Returns:
+        tuple: (DataFrame, count) 成功获取的模型数据
+    """
+    from ..db import init_database, CUSTOM_MODELS_TABLE
+
+    init_database()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute(f"SELECT platform, model_id, url FROM {CUSTOM_MODELS_TABLE}")
+    custom_models = cursor.fetchall()
+    conn.close()
+
+    if not custom_models:
+        return pd.DataFrame(), 0
+
+    records = []
+    total = len(custom_models)
+
+    for i, (platform, model_id, url) in enumerate(custom_models, 1):
+        try:
+            print(f"  [{i}/{total}] 获取自定义模型: {platform} - {model_id}")
+
+            if platform == 'Hugging Face':
+                fetcher = HuggingFaceSingleFetcher(target_date=target_date)
+                # model_id 格式: publisher/model_name
+                parts = model_id.split('/', 1)
+                if len(parts) == 2:
+                    publisher, model_name = parts
+                    record = fetcher.refetch(model_name, publisher)
+                    if record:
+                        record['data_source'] = 'custom'
+                        records.append(record)
+
+            elif platform == 'ModelScope':
+                fetcher = ModelScopeSingleFetcher(target_date=target_date)
+                # model_id 格式: publisher/model_name
+                parts = model_id.split('/', 1)
+                if len(parts) == 2:
+                    publisher, model_name = parts
+                    record = fetcher.refetch(model_name, publisher)
+                    if record:
+                        record['data_source'] = 'custom'
+                        records.append(record)
+
+            elif platform == 'AI Studio':
+                fetcher = AIStudioSingleFetcher(target_date=target_date)
+                # 对于 AI Studio，model_id 是完整的 URL
+                # 需要从数据库中已有的记录获取 publisher 和 model_name
+                # 或者通过 URL 解析
+                record = _fetch_aistudio_custom(fetcher, url)
+                if record:
+                    record['data_source'] = 'custom'
+                    records.append(record)
+
+            if progress_callback:
+                progress_callback(i, total)
+
+        except Exception as e:
+            print(f"  ❌ 获取 {platform}/{model_id} 失败: {e}")
+
+    if records:
+        df = pd.DataFrame(records)
+        print(f"  ✅ 自定义模型获取完成: {len(df)} 个模型")
+        return df, len(df)
+    else:
+        print(f"  ⚠️  没有获取到任何自定义模型数据")
+        return pd.DataFrame(), 0
+
+
+def _fetch_aistudio_custom(fetcher, url):
+    """
+    获取 AI Studio 自定义模型的数据
+
+    对于 AI Studio，需要特殊处理：
+    1. 先尝试从 custom_models 表中找到该 URL 对应的 publisher 和 model_name（白名单）
+    2. 如果找不到，再从 model_downloads 表中查找历史记录
+    3. 如果都找不到，则跳过
+    """
+    import sqlite3
+    from ..config import DB_PATH
+    from ..db import DATA_TABLE, CUSTOM_MODELS_TABLE
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        # 优先从 custom_models 表查找（白名单信息）
+        cursor.execute(f"""
+            SELECT publisher, model_name
+            FROM {CUSTOM_MODELS_TABLE}
+            WHERE url = ? AND platform = 'AI Studio'
+            LIMIT 1
+        """, (url,))
+        result = cursor.fetchone()
+
+        # 如果白名单中没有，再从历史数据中查找
+        if not result:
+            cursor.execute(f"""
+                SELECT publisher, model_name
+                FROM {DATA_TABLE}
+                WHERE url = ? AND repo = 'AI Studio'
+                LIMIT 1
+            """, (url,))
+            result = cursor.fetchone()
+
+        conn.close()
+
+        if result:
+            publisher, model_name = result
+            return fetcher.refetch(model_name, publisher)
+        else:
+            # 没有找到任何记录
+            print(f"  ⚠️  AI Studio 模型需要先在白名单或数据库中有记录: {url}")
+            return None
+
+    except Exception as e:
+        print(f"  ❌ AI Studio 自定义模型获取失败: {e}")
+        return None

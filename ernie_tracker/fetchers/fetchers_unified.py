@@ -590,6 +590,17 @@ def fetch_all_paddlepaddle_data(platforms=None, progress_callback=None, progress
     # 原因：app.py 中需要更精细的 UI 进度控制，且能避免两层调用导致的重复执行
     # 参考：app.py 的并行和串行执行模式中的 Model Tree 调用
 
+    # ========== 获取自定义模型的数据 ==========
+    try:
+        from .fetchers_single_model import fetch_custom_models
+        custom_df, custom_count = fetch_custom_models(progress_callback=progress_callback)
+        if not custom_df.empty:
+            all_dfs.append(custom_df)
+            total_count += custom_count
+            print(f"✅ 自定义模型 完成：获取 {custom_count} 个模型")
+    except Exception as e:
+        print(f"⚠️ 获取自定义模型失败：{e}")
+
     if all_dfs:
         final_df = pd.concat(all_dfs, ignore_index=True)
         return final_df, total_count
