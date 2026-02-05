@@ -1283,8 +1283,7 @@ def analyze_derivative_models_all_platforms(df, selected_series=None):
     if selected_series:
         series_mapping = {
             "ERNIE-4.5": "ernie-4.5",
-            "PaddleOCR-VL": "paddleocr-vl",
-            "其他ERNIE": "other-ernie"
+            "PaddleOCR-VL": "paddleocr-vl"
         }
 
         selected_categories = [series_mapping.get(s, s) for s in selected_series]
@@ -1322,8 +1321,7 @@ def analyze_derivative_models_all_platforms(df, selected_series=None):
         if selected_series and 'model_category' in platform_derivative_df.columns:
             series_mapping = {
                 "ERNIE-4.5": "ernie-4.5",
-                "PaddleOCR-VL": "paddleocr-vl",
-                "其他ERNIE": "other-ernie"
+                "PaddleOCR-VL": "paddleocr-vl"
             }
 
             for series in selected_series:
@@ -1429,20 +1427,24 @@ def get_current_quarter_name(current_date):
     return f"{year}Q{quarter}"
 
 
-def calculate_periodic_stats(current_date, selected_series=None):
+def calculate_periodic_stats(current_date, selected_series=None, base_date=None):
     """
-    计算周期性统计数据（本周、当前季度新增等）
+    计算周期性统计数据（新增模型等）
 
     Args:
-        current_date: 分析日期 (YYYY-MM-DD)
+        current_date: 分析日期 (YYYY-MM-DD)，即终止日期
         selected_series: 模型系列列表，如 ['ERNIE-4.5', 'PaddleOCR-VL']
+        base_date: 对比基准日期 (YYYY-MM-DD)，即起始日期。如果不提供则默认为 7 天前
 
     Returns:
         dict: 包含周期性统计的字典
     """
     # 计算时间点
     current_date_dt = datetime.strptime(current_date, '%Y-%m-%d')
-    last_week_date = (current_date_dt - timedelta(days=7)).strftime('%Y-%m-%d')
+    if base_date:
+        last_week_date = base_date
+    else:
+        last_week_date = (current_date_dt - timedelta(days=7)).strftime('%Y-%m-%d')
     quarter_start_date = get_quarter_start_date(current_date)
     quarter_name = get_current_quarter_name(current_date)
 
@@ -1479,8 +1481,7 @@ def calculate_periodic_stats(current_date, selected_series=None):
             return df
         series_mapping = {
             "ERNIE-4.5": "ernie-4.5",
-            "PaddleOCR-VL": "paddleocr-vl",
-            "其他ERNIE": "other-ernie"
+            "PaddleOCR-VL": "paddleocr-vl"
         }
         selected_categories = [series_mapping.get(s, s) for s in selected_series]
 
@@ -1493,8 +1494,6 @@ def calculate_periodic_stats(current_date, selected_series=None):
                 name_pattern = 'ERNIE-4.5'
             elif category == 'paddleocr-vl':
                 name_pattern = 'PaddleOCR-VL'
-            elif category == 'other-ernie':
-                name_pattern = 'ERNIE'  # 宽泛匹配
             else:
                 name_pattern = category
 
@@ -1580,7 +1579,9 @@ def calculate_periodic_stats(current_date, selected_series=None):
 
     return {
         'current_date': current_date,
+        'base_date': last_week_date,
         'total_count': total_count,
+        'base_total_count': len(last_week_derivatives),
         'weekly_new_count': weekly_new_count,
         'quarter_new_count': quarter_new_count,
         'quarter_name': quarter_name,

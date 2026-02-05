@@ -27,7 +27,7 @@ def classify_model_category(model_name, search_keyword):
         search_keyword: 搜索关键词（可能为 NULL）
 
     Returns:
-        str: model_category ('ernie-4.5', 'paddleocr-vl', 'other-ernie', 'other')
+        str: model_category ('ernie-4.5', 'paddleocr-vl', 'other')
     """
     model_name = str(model_name).lower()
 
@@ -40,12 +40,10 @@ def classify_model_category(model_name, search_keyword):
             return 'paddleocr-vl'
 
     # 2. 使用模型名称判断
-    if 'ernie-4.5' in model_name or 'ernie4.5' in model_name or ('文心' in model_name and '4.5' in model_name):
-        return 'ernie-4.5'
-    elif 'paddleocr-vl' in model_name or 'paddleocrvl' in model_name:
+    if 'paddleocr-vl' in model_name or 'paddleocrvl' in model_name:
         return 'paddleocr-vl'
     elif 'ernie' in model_name or '文心' in model_name:
-        return 'other-ernie'
+        return 'ernie-4.5'  # 所有 ERNIE 相关都归入 ernie-4.5
     else:
         return 'other'
 
@@ -84,7 +82,6 @@ def backfill_model_category():
     category_counts = {
         'ernie-4.5': 0,
         'paddleocr-vl': 0,
-        'other-ernie': 0,
         'other': 0
     }
 
@@ -122,7 +119,6 @@ def backfill_model_category():
     print(f"\n分类统计:")
     print(f"  - ernie-4.5:     {category_counts['ernie-4.5']:,} 条")
     print(f"  - paddleocr-vl:  {category_counts['paddleocr-vl']:,} 条")
-    print(f"  - other-ernie:   {category_counts['other-ernie']:,} 条")
     print(f"  - other:         {category_counts['other']:,} 条")
 
     if remaining > 0:

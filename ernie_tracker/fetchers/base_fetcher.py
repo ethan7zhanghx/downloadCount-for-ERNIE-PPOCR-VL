@@ -7,6 +7,36 @@ import pandas as pd
 from ..config import SEARCH_QUERY
 
 
+def classify_model_category(model_name, search_keyword=None):
+    """
+    根据 model_name 和 search_keyword 自动推断 model_category
+
+    Args:
+        model_name: 模型名称
+        search_keyword: 搜索关键词（可选）
+
+    Returns:
+        str: 'ernie-4.5', 'paddleocr-vl', 或 'other'
+    """
+    model_name_lower = str(model_name).lower()
+
+    # 1. 优先使用 search_keyword
+    if search_keyword:
+        sk_upper = str(search_keyword).upper()
+        if 'ERNIE-4.5' in sk_upper or sk_upper == 'ERNIE-4.5':
+            return 'ernie-4.5'
+        elif 'PADDLEOCR-VL' in sk_upper or sk_upper == 'PaddleOCR-VL':
+            return 'paddleocr-vl'
+
+    # 2. 使用模型名称判断
+    if 'paddleocr-vl' in model_name_lower or 'paddleocrvl' in model_name_lower:
+        return 'paddleocr-vl'
+    elif 'ernie' in model_name_lower or '文心' in model_name_lower:
+        return 'ernie-4.5'  # 所有 ERNIE 相关都归入 ernie-4.5
+    else:
+        return 'other'
+
+
 class BaseFetcher(ABC):
     """爬虫基类"""
 
@@ -31,7 +61,7 @@ class BaseFetcher(ABC):
         pass
 
     def create_record(self, model_name, publisher, download_count, search_keyword=None,
-                     created_at=None, last_modified=None, url=None):
+                     created_at=None, last_modified=None, url=None, model_category=None):
         """
         创建一条记录
 
@@ -43,16 +73,22 @@ class BaseFetcher(ABC):
             created_at: 创建时间（可选）
             last_modified: 最后修改时间（可选）
             url: 模型详情页URL（可选）
+            model_category: 模型分类（可选，如不提供则自动推断）
 
         Returns:
             dict: 记录字典
         """
+        # 自动推断 model_category（如果未提供）
+        if model_category is None:
+            model_category = classify_model_category(model_name, search_keyword)
+
         record = {
             "date": self.today,
             "repo": self.platform_name,
             "model_name": model_name,
             "publisher": publisher,
             "download_count": download_count,
+            "model_category": model_category,
             "fetched_at": self.fetched_at  # 入库时间(日期时间)
         }
         if search_keyword:

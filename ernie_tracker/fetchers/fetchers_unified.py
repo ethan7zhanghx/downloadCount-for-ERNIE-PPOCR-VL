@@ -113,15 +113,20 @@ def fetch_hugging_face_data_unified(progress_callback=None, progress_total=None,
                                 print(f"    - downloads (fallback): {getattr(info, 'downloads', 'N/A')}")
                                 print(f"    - created_at: {getattr(info, 'created_at', 'N/A')}")
 
+                            # 自动推断 model_category
+                            model_name_part = m.id.split("/", 1)[1] if "/" in m.id else m.id
+                            publisher_part = m.id.split("/")[0]
+                            auto_category = classify_model(model_name_part, publisher_part, None)
+
                             model_data = {
                                 "date": date.today().isoformat(),
                                 "repo": "Hugging Face",
-                                "model_name": m.id.split("/", 1)[1] if "/" in m.id else m.id,
-                                "publisher": m.id.split("/")[0],
+                                "model_name": model_name_part,
+                                "publisher": publisher_part,
                                 "download_count": downloads,
                                 # 传统搜索模式不包含 model tree 信息
                                 "model_type": None,
-                                "model_category": None,
+                                "model_category": auto_category,  # 🔧 修复：自动推断分类
                                 "tags": None,
                                 "base_model": None,
                                 "data_source": 'search',  # 标记为传统搜索模式

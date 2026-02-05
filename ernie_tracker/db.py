@@ -101,6 +101,8 @@ def init_database():
             conn.execute(f"ALTER TABLE {CUSTOM_MODELS_TABLE} ADD COLUMN publisher TEXT")
         if 'model_name' not in custom_columns:
             conn.execute(f"ALTER TABLE {CUSTOM_MODELS_TABLE} ADD COLUMN model_name TEXT")
+        if 'model_category' not in custom_columns:
+            conn.execute(f"ALTER TABLE {CUSTOM_MODELS_TABLE} ADD COLUMN model_category TEXT DEFAULT 'ernie-4.5'")
     except Exception as e:
         print(f"更新 custom_models 表结构时出错: {e}")
 
@@ -362,12 +364,13 @@ def parse_model_url(url):
     return None, None
 
 
-def add_custom_model(url):
+def add_custom_model(url, model_category=None):
     """
     添加自定义模型到跟踪列表
 
     Args:
         url: 模型URL
+        model_category: 模型分类（可选，如不提供则自动推断）
 
     Returns:
         dict: {'success': bool, 'message': str, 'id': int}
@@ -386,6 +389,17 @@ def add_custom_model(url):
         if len(parts) == 2:
             publisher, model_name = parts
 
+    # 自动推断 model_category（如果未提供）
+    if model_category is None:
+        # 使用 backfill 脚本的逻辑
+        name_lower = str(model_name or model_id).lower()
+        if 'paddleocr-vl' in name_lower or 'paddleocrvl' in name_lower:
+            model_category = 'paddleocr-vl'
+        elif 'ernie' in name_lower or '文心' in name_lower:
+            model_category = 'ernie-4.5'  # 所有 ERNIE 相关都归入 ernie-4.5
+        else:
+            model_category = 'other'
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -397,9 +411,9 @@ def add_custom_model(url):
 
     # 插入新记录
     cursor.execute(f"""
-        INSERT INTO {CUSTOM_MODELS_TABLE} (platform, model_id, url, added_at, publisher, model_name)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (platform, model_id, url, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), publisher, model_name))
+        INSERT INTO {CUSTOM_MODELS_TABLE} (platform, model_id, url, added_at, publisher, model_name, model_category)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (platform, model_id, url, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), publisher, model_name, model_category))
 
     new_id = cursor.lastrowid
     conn.commit()
@@ -436,14 +450,14 @@ def get_custom_models():
     获取所有自定义模型列表
 
     Returns:
-        list: 字典列表，每个包含 id, platform, model_id, url, added_at, publisher, model_name
+        list: 字典列表，每个包含 id, platform, model_id, url, added_at, publisher, model_name, model_category
     """
     init_database()
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     cursor.execute(f"""
-        SELECT id, platform, model_id, url, added_at, publisher, model_name
+        SELECT id, platform, model_id, url, added_at, publisher, model_name, model_category
         FROM {CUSTOM_MODELS_TABLE}
         ORDER BY added_at DESC
     """)
@@ -459,13 +473,14 @@ def get_custom_models():
             'url': row[3],
             'added_at': row[4],
             'publisher': row[5],
-            'model_name': row[6]
+            'model_name': row[6],
+            'model_category': row[7] if len(row) > 7 else 'ernie-4.5'
         }
         for row in rows
     ]
 
 
-def add_custom_model_with_info(url, platform, model_name, publisher):
+def add_custom_model_with_info(url, platform, model_name, publisher, model_category='ernie-4.5'):
     """
     添加自定义模型到跟踪列表（支持手动指定模型信息）
 
@@ -476,6 +491,7 @@ def add_custom_model_with_info(url, platform, model_name, publisher):
         platform: 平台名称
         model_name: 模型名称
         publisher: 发布者
+        model_category: 模型分类（默认为 'ernie-4.5'）
 
     Returns:
         dict: {'success': bool, 'message': str, 'id': int}
@@ -496,9 +512,9 @@ def add_custom_model_with_info(url, platform, model_name, publisher):
 
     # 插入新记录
     cursor.execute(f"""
-        INSERT INTO {CUSTOM_MODELS_TABLE} (platform, model_id, url, added_at, publisher, model_name)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (platform, model_id, url, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), publisher, model_name))
+        INSERT INTO {CUSTOM_MODELS_TABLE} (platform, model_id, url, added_at, publisher, model_name, model_category)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (platform, model_id, url, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), publisher, model_name, model_category))
 
     new_id = cursor.lastrowid
     conn.commit()

@@ -352,7 +352,7 @@ def fetch_custom_models(target_date=None, progress_callback=None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    cursor.execute(f"SELECT platform, model_id, url FROM {CUSTOM_MODELS_TABLE}")
+    cursor.execute(f"SELECT platform, model_id, url, model_category FROM {CUSTOM_MODELS_TABLE}")
     custom_models = cursor.fetchall()
     conn.close()
 
@@ -362,7 +362,7 @@ def fetch_custom_models(target_date=None, progress_callback=None):
     records = []
     total = len(custom_models)
 
-    for i, (platform, model_id, url) in enumerate(custom_models, 1):
+    for i, (platform, model_id, url, model_category) in enumerate(custom_models, 1):
         try:
             print(f"  [{i}/{total}] 获取自定义模型: {platform} - {model_id}")
 
@@ -375,6 +375,7 @@ def fetch_custom_models(target_date=None, progress_callback=None):
                     record = fetcher.refetch(model_name, publisher)
                     if record:
                         record['data_source'] = 'custom'
+                        record['model_category'] = model_category  # 🔧 使用白名单中保存的分类
                         records.append(record)
 
             elif platform == 'ModelScope':
@@ -386,6 +387,7 @@ def fetch_custom_models(target_date=None, progress_callback=None):
                     record = fetcher.refetch(model_name, publisher)
                     if record:
                         record['data_source'] = 'custom'
+                        record['model_category'] = model_category  # 🔧 使用白名单中保存的分类
                         records.append(record)
 
             elif platform == 'AI Studio':
@@ -396,6 +398,7 @@ def fetch_custom_models(target_date=None, progress_callback=None):
                 record = _fetch_aistudio_custom(fetcher, url)
                 if record:
                     record['data_source'] = 'custom'
+                    record['model_category'] = model_category  # 🔧 使用白名单中保存的分类
                     records.append(record)
 
             if progress_callback:

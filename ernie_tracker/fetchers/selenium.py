@@ -468,14 +468,14 @@ class AIStudioFetcher(BaseFetcher):
                 processed_count = 0
                 processed_models = set()  # 记录已处理模型的名称（用于去重）
 
-                # 加载已有URL的模型集合（用于跳过URL获取）
+                # 加载已有URL的模型映射（用于获取已有的URL）
                 from ..config import DB_PATH
                 import sqlite3
-                existing_models_with_url = set()
+                existing_models_with_url = {}
                 try:
                     conn = sqlite3.connect(DB_PATH)
                     existing_query = """
-                        SELECT DISTINCT publisher, model_name
+                        SELECT DISTINCT publisher, model_name, url
                         FROM model_downloads
                         WHERE repo = 'AI Studio' AND url IS NOT NULL AND url != ''
                     """
@@ -484,10 +484,10 @@ class AIStudioFetcher(BaseFetcher):
                     conn.close()
 
                     if not existing_df.empty:
-                        existing_models_with_url = set(
-                            f"{row['publisher']}/{row['model_name']}"
+                        existing_models_with_url = {
+                            f"{row['publisher']}/{row['model_name']}": row['url']
                             for _, row in existing_df.iterrows()
-                        )
+                        }
                         print(f"[AI Studio] 📚 数据库中已有 {len(existing_models_with_url)} 个模型带URL，将跳过URL获取")
                 except Exception as e:
                     print(f"[AI Studio] ⚠️  无法加载已存在模型列表: {e}")
@@ -599,7 +599,8 @@ class AIStudioFetcher(BaseFetcher):
 
                                 # 检查是否需要点击获取详细信息
                                 model_key = f"{publisher}/{model_name}"
-                                has_url = model_key in existing_models_with_url
+                                existing_url = existing_models_with_url.get(model_key)
+                                has_url = existing_url is not None
                                 needs_precise_count = self._is_simplified_count(usage_count)
 
                                 # 决策：是否需要点击
@@ -609,7 +610,7 @@ class AIStudioFetcher(BaseFetcher):
                                     # 已有URL且下载量精确，跳过点击
                                     self._log_info(f"[AI Studio] ⏭️  跳过点击（已有URL且下载量精确）: {model_key}")
                                     final_usage_count = usage_count
-                                    model_url = None  # URL已存在，不需要从详情页获取
+                                    model_url = existing_url  # 🔧 使用数据库中已有的URL
                                 else:
                                     # 需要点击：获取URL 或 精确下载量
                                     if has_url and needs_precise_count:

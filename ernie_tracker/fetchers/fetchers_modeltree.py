@@ -790,6 +790,7 @@ def update_ernie_model_tree(save_to_db: bool = True) -> Tuple[pd.DataFrame, int]
         'last_modified',
         'fetched_at',
         'base_model_from_api',
+        'url',  # 🔧 修复：之前遗漏了 url 字段
     ]
 
     # 确保所有必需列都存在

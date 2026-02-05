@@ -2935,10 +2935,11 @@ elif page == "🗄️ 数据库管理":
 
 # ================= 整体对标统计模块 =================
 elif page == "📈 整体对标统计":
-    from ernie_tracker.analysis import get_available_dates, calculate_weekly_report
+    from ernie_tracker.analysis import get_available_dates, calculate_weekly_report, format_report_tables
+    import plotly.graph_objects as go
 
     st.markdown("## 📈 整体对标统计")
-    st.info("📊 ERNIE-4.5 和 PaddleOCR-VL 两个系列的整体数据对标。")
+    st.info("📊 对比 ERNIE-4.5 和 PaddleOCR-VL 两个系列的整体数据，包括下载量、增长量、衍生模型数等核心指标。")
 
     # 获取可用日期
     available_dates = get_available_dates()
@@ -2993,7 +2994,10 @@ elif page == "📈 整体对标统计":
             if ernie_report is None or ocr_report is None:
                 st.error("❌ 无法生成报告，请检查选择的日期是否有数据。")
             else:
-                st.success(f"✅ 统计报告生成成功！")
+                st.success(f"✅ 统计报告生成成功！对比时间段：{saved_previous_date} → {saved_current_date}")
+
+                # ========== 整体汇总（加总） ==========
+                st.markdown("### 📊 整体汇总（ERNIE-4.5 + PaddleOCR-VL）")
 
                 ernie_stats = ernie_report['summary_stats']
                 ocr_stats = ocr_report['summary_stats']
@@ -3005,6 +3009,10 @@ elif page == "📈 整体对标统计":
                 total_official_growth = ernie_stats['official_growth'] + ocr_stats['official_growth']
                 total_derivative_current = ernie_stats['derivative_current_total'] + ocr_stats['derivative_current_total']
                 total_derivative_growth = ernie_stats['derivative_growth'] + ocr_stats['derivative_growth']
+                total_derivative_models = (ernie_stats.get('derivative_current_total_models', 0) or 0) + \
+                                         (ocr_stats.get('derivative_current_total_models', 0) or 0)
+                total_new_models = (ernie_stats.get('derivative_new_models', 0) or 0) + \
+                                  (ocr_stats.get('derivative_new_models', 0) or 0)
 
                 # 格式化函数
                 def format_num(n):
@@ -3019,18 +3027,162 @@ elif page == "📈 整体对标统计":
                 official_growth_percent = total_official_growth / total_all_growth if total_all_growth else 0
                 derivative_growth_percent = total_derivative_growth / total_all_growth if total_all_growth else 0
 
-                # 显示加总摘要
-                st.markdown("### 📝 整体对标结果")
+                # 显示汇总信息
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+                    st.metric(
+                        "累计总下载量",
+                        format_num(total_all_current),
+                        format_num(total_all_growth)
+                    )
+                    st.caption(f"官方 {format_percent(official_percent)} | 衍生 {format_percent(derivative_percent)}")
+
+                with col2:
+                    st.metric(
+                        "本周增长量",
+                        format_num(total_all_growth),
+                        f"{format_percent(total_all_growth/total_all_current if total_all_current else 0)}"
+                    )
+                    st.caption(f"官方 {format_percent(official_growth_percent)} | 衍生 {format_percent(derivative_growth_percent)}")
+
+                with col3:
+                    st.metric(
+                        "累计衍生模型数",
+                        f"{int(total_derivative_models)} 个",
+                        f"+{int(total_new_models)} 个"
+                    )
+                    st.caption("本周新增（HF非官方差集）")
+
+                # 详细文字摘要
+                st.markdown("---")
                 summary_text = f"""
-截至 **{saved_current_date}**，ERNIE-4.5 和 PaddleOCR-VL 累计下载 **{format_num(total_all_current)}** 次
-（含官方模型 **{format_num(total_official_current)}** 次，占比 **{format_percent(official_percent)}**，
-衍生 **{format_num(total_derivative_current)}** 次，占比 **{format_percent(derivative_percent)}**），
-较上周增长 **{format_num(total_all_growth)}** 次
-（官方模型 **{format_num(total_official_growth)}** 次，占比 **{format_percent(official_growth_percent)}**，
-衍生模型增长 **{format_num(total_derivative_growth)}** 次，占比 **{format_percent(derivative_growth_percent)}**）。
+                截至 **{saved_current_date}**，ERNIE-4.5 和 PaddleOCR-VL 累计下载 **{format_num(total_all_current)}** 次
+                （含官方模型 **{format_num(total_official_current)}** 次，占比 **{format_percent(official_percent)}**，
+                衍生 **{format_num(total_derivative_current)}** 次，占比 **{format_percent(derivative_percent)}**），
+                较上周增长 **{format_num(total_all_growth)}** 次
+                （官方模型 **{format_num(total_official_growth)}** 次，占比 **{format_percent(official_growth_percent)}**，
+                衍生模型增长 **{format_num(total_derivative_growth)}** 次，占比 **{format_percent(derivative_growth_percent)}**）。
+
+                累计衍生模型 **{int(total_derivative_models)}** 个，本周新增 **{int(total_new_models)}** 个。
                 """
                 st.info(summary_text)
 
+                # ========== 系列对比 ==========
+                st.markdown("### 📊 系列对比（ERNIE-4.5 vs PaddleOCR-VL）")
+
+                # 对比表格
+                comparison_data = {
+                    '指标': [
+                        '累计总下载量',
+                        '本周增长量',
+                        '官方模型下载量',
+                        '衍生模型下载量',
+                        '累计衍生模型数',
+                        '本周新增衍生模型数'
+                    ],
+                    'ERNIE-4.5': [
+                        format_num(ernie_stats['all_current_total']),
+                        format_num(ernie_stats['all_growth']),
+                        format_num(ernie_stats['official_current_total']),
+                        format_num(ernie_stats['derivative_current_total']),
+                        f"{int(ernie_stats.get('derivative_current_total_models', 0) or 0)} 个",
+                        f"{int(ernie_stats.get('derivative_new_models', 0) or 0)} 个"
+                    ],
+                    'PaddleOCR-VL': [
+                        format_num(ocr_stats['all_current_total']),
+                        format_num(ocr_stats['all_growth']),
+                        format_num(ocr_stats['official_current_total']),
+                        format_num(ocr_stats['derivative_current_total']),
+                        f"{int(ocr_stats.get('derivative_current_total_models', 0) or 0)} 个",
+                        f"{int(ocr_stats.get('derivative_new_models', 0) or 0)} 个"
+                    ],
+                    '合计': [
+                        format_num(total_all_current),
+                        format_num(total_all_growth),
+                        format_num(total_official_current),
+                        format_num(total_derivative_current),
+                        f"{int(total_derivative_models)} 个",
+                        f"{int(total_new_models)} 个"
+                    ]
+                }
+
+                comparison_df = pd.DataFrame(comparison_data)
+                st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+
+                # ========== 可视化对比 ==========
+                st.markdown("### 📈 可视化对比")
+
+                tab1, tab2, tab3 = st.tabs(["下载量对比", "增长量对比", "衍生模型数对比"])
+
+                with tab1:
+                    # 下载量对比柱状图
+                    fig1 = go.Figure(data=[
+                        go.Bar(name='ERNIE-4.5', x=['累计总下载', '官方模型', '衍生模型'],
+                               y=[ernie_stats['all_current_total'],
+                                  ernie_stats['official_current_total'],
+                                  ernie_stats['derivative_current_total']]),
+                        go.Bar(name='PaddleOCR-VL', x=['累计总下载', '官方模型', '衍生模型'],
+                               y=[ocr_stats['all_current_total'],
+                                  ocr_stats['official_current_total'],
+                                  ocr_stats['derivative_current_total']])
+                    ])
+                    fig1.update_layout(title='累计下载量对比', barmode='group', yaxis_title='下载次数')
+                    st.plotly_chart(fig1, use_container_width=True)
+
+                with tab2:
+                    # 增长量对比柱状图
+                    fig2 = go.Figure(data=[
+                        go.Bar(name='ERNIE-4.5', x=['总增长', '官方模型增长', '衍生模型增长'],
+                               y=[ernie_stats['all_growth'],
+                                  ernie_stats['official_growth'],
+                                  ernie_stats['derivative_growth']]),
+                        go.Bar(name='PaddleOCR-VL', x=['总增长', '官方模型增长', '衍生模型增长'],
+                               y=[ocr_stats['all_growth'],
+                                  ocr_stats['official_growth'],
+                                  ocr_stats['derivative_growth']])
+                    ])
+                    fig2.update_layout(title='本周增长量对比', barmode='group', yaxis_title='增长次数')
+                    st.plotly_chart(fig2, use_container_width=True)
+
+                with tab3:
+                    # 衍生模型数对比
+                    fig3 = go.Figure(data=[
+                        go.Bar(name='ERNIE-4.5', x=['累计衍生模型', '本周新增'],
+                               y=[ernie_stats.get('derivative_current_total_models', 0) or 0,
+                                  ernie_stats.get('derivative_new_models', 0) or 0]),
+                        go.Bar(name='PaddleOCR-VL', x=['累计衍生模型', '本周新增'],
+                               y=[ocr_stats.get('derivative_current_total_models', 0) or 0,
+                                  ocr_stats.get('derivative_new_models', 0) or 0])
+                    ])
+                    fig3.update_layout(title='衍生模型数量对比', barmode='group', yaxis_title='模型数量')
+                    st.plotly_chart(fig3, use_container_width=True)
+
+                # ========== 平台维度对比 ==========
+                st.markdown("### 🌍 平台维度对比")
+
+                # 合并两个系列的平台数据
+                ernie_tables = format_report_tables(ernie_report)
+                ocr_tables = format_report_tables(ocr_report)
+
+                ernie_platform = ernie_tables['platform_summary'].copy()
+                ocr_platform = ocr_tables['platform_summary'].copy()
+
+                # 重命名列以便合并
+                ernie_platform.columns = ['平台', 'ERNIE-4.5总下载', 'ERNIE-4.5本周增长', 'ERNIE-4.5增长率']
+                ocr_platform.columns = ['平台', 'PaddleOCR-VL总下载', 'PaddleOCR-VL本周增长', 'PaddleOCR-VL增长率']
+
+                # 合并数据
+                platform_combined = pd.merge(ernie_platform, ocr_platform, on='平台', how='outer').fillna(0)
+
+                # 计算合计列
+                platform_combined['合计总下载'] = platform_combined['ERNIE-4.5总下载'] + platform_combined['PaddleOCR-VL总下载']
+                platform_combined['合计本周增长'] = platform_combined['ERNIE-4.5本周增长'] + platform_combined['PaddleOCR-VL本周增长']
+
+                # 排序
+                platform_combined = platform_combined.sort_values('合计总下载', ascending=False)
+
+                st.dataframe(platform_combined, use_container_width=True, hide_index=True)
 
 
 # ================= 衍生模型生态分析模块 =================
@@ -3055,41 +3207,20 @@ elif page == "🌳 衍生模型生态":
     if not available_dates:
         st.warning("⚠️ 数据库中暂无数据，请先在「数据更新」页面抓取数据。")
     else:
-        # 配置选项：计算默认的上周五
-        from datetime import datetime as _dt, timedelta as _td
-        today = _dt.now()
-        # 上周五：往前推到最近的周五（如果今天是周五则取上一个周五）
-        days_since_friday = (today.weekday() - 4) % 7
-        if days_since_friday == 0:
-            days_since_friday = 7
-        last_friday = (today - _td(days=days_since_friday)).strftime('%Y-%m-%d')
-
-        # 找到最接近上周五的可用日期作为默认起始日期
-        default_base_idx = 0
-        for i, d in enumerate(available_dates):
-            if d <= last_friday:
-                default_base_idx = i
-                break
-
-        col_config1, col_config2, col_config3 = st.columns([2, 2, 2])
+        # 配置选项
+        col_config1, col_config2 = st.columns([2, 2])
 
         with col_config1:
-            base_date = st.selectbox(
-                "📅 起始日期（对比基准）",
+            # 日期选择
+            selected_date = st.selectbox(
+                "📅 选择分析日期",
                 options=available_dates,
-                index=default_base_idx,
-                help="选择对比的基准日期，新增模型将相对于此日期计算"
+                index=0,
+                help="选择要分析的数据日期"
             )
 
         with col_config2:
-            selected_date = st.selectbox(
-                "📅 终止日期（当前）",
-                options=available_dates,
-                index=0,
-                help="选择要分析的最新日期"
-            )
-
-        with col_config3:
+            # 模型系列筛选
             selected_series = st.multiselect(
                 "🎯 模型系列筛选",
                 options=["ERNIE-4.5", "PaddleOCR-VL"],
@@ -3101,14 +3232,9 @@ elif page == "🌳 衍生模型生态":
             st.warning("⚠️ 请至少选择一个模型系列")
             st.stop()
 
-        if base_date <= selected_date:
-            pass
-        else:
-            st.warning("⚠️ 起始日期必须早于终止日期")
-            st.stop()
-
+        # 显示筛选说明
         series_info = "、".join(selected_series)
-        st.info(f"📊 **分析系列**: {series_info} | **对比区间**: {base_date} → {selected_date} | **衍生模型定义**: 非官方发布者发布的模型")
+        st.info(f"📊 **分析系列**: {series_info} | **数据范围**: 所有平台 | **衍生模型定义**: 非官方发布者发布的模型")
 
         if st.button("🔍 开始分析", type="primary"):
             with st.spinner("正在分析衍生模型生态..."):
@@ -3162,24 +3288,23 @@ elif page == "🌳 衍生模型生态":
                             deleted_by_category[cat] = deleted_by_category.get(cat, 0) + 1
 
                         # 计算周期性统计
-                        periodic_stats = calculate_periodic_stats(selected_date, selected_series=selected_series, base_date=base_date)
+                        periodic_stats = calculate_periodic_stats(selected_date, selected_series=selected_series)
 
                         if periodic_stats:
                             # 显示总体统计摘要
                             total_deleted = len(deleted_models)
                             current_available = periodic_stats['total_count'] - total_deleted
-                            ps_base = periodic_stats['base_date']
 
                             if total_deleted > 0:
                                 summary_text = f"""
                                 **截止 {selected_date}**，累计出现过衍生模型 **{periodic_stats['total_count']:,}** 个（当前可用 **{current_available:,}** 个，已删除 **{total_deleted:,}** 个），
-                                相比 {ps_base} 的 **{periodic_stats['base_total_count']:,}** 个，新增 **{periodic_stats['weekly_new_count']:,}** 个，
+                                本周新增 **{periodic_stats['weekly_new_count']:,}** 个，
                                 {periodic_stats['quarter_name']} 新增 **{periodic_stats['quarter_new_count']:,}** 个
                                 """
                             else:
                                 summary_text = f"""
                                 **截止 {selected_date}**，累计衍生模型 **{periodic_stats['total_count']:,}** 个，
-                                相比 {ps_base} 的 **{periodic_stats['base_total_count']:,}** 个，新增 **{periodic_stats['weekly_new_count']:,}** 个，
+                                本周新增 **{periodic_stats['weekly_new_count']:,}** 个，
                                 {periodic_stats['quarter_name']} 新增 **{periodic_stats['quarter_new_count']:,}** 个
                                 """
 
@@ -3188,9 +3313,9 @@ elif page == "🌳 衍生模型生态":
                             # 按系列详细统计
                             if periodic_stats['stats_by_series']:
                                 st.markdown("#### 📊 分系列统计")
-                                for category, cat_stats in periodic_stats['stats_by_series'].items():
+                                for category, stats in periodic_stats['stats_by_series'].items():
                                     deleted_count = deleted_by_category.get(category, 0)
-                                    available_count = cat_stats['total_count'] - deleted_count
+                                    available_count = stats['total_count'] - deleted_count
 
                                     if deleted_count > 0:
                                         detail_text = f"（当前可用 **{available_count:,}** 个，已删除 **{deleted_count:,}** 个）"
@@ -3198,14 +3323,14 @@ elif page == "🌳 衍生模型生态":
                                         detail_text = ""
 
                                     st.markdown(f"""
-                                    - **{category}** 衍生模型累计 **{cat_stats['total_count']:,}** 个{detail_text}，
-                                      相比 {ps_base} 新增 **{cat_stats['weekly_new_count']:,}** 个，
-                                      {periodic_stats['quarter_name']} 新增 **{cat_stats['quarter_new_count']:,}** 个
+                                    - **{category}** 衍生模型累计 **{stats['total_count']:,}** 个{detail_text}，
+                                      本周新增 **{stats['weekly_new_count']:,}** 个，
+                                      {periodic_stats['quarter_name']} 新增 **{stats['quarter_new_count']:,}** 个
                                     """)
 
-                            # 新增模型列表
+                            # 本周新增模型列表
                             if periodic_stats['weekly_new_models']:
-                                with st.expander(f"📋 新增模型列表（{ps_base} → {selected_date}，共 {periodic_stats['weekly_new_count']} 个）", expanded=False):
+                                with st.expander(f"📋 本周新增模型列表 ({periodic_stats['weekly_new_count']} 个)", expanded=False):
                                     weekly_new_df = pd.DataFrame(periodic_stats['weekly_new_models'])
                                     weekly_new_df['download_count'] = pd.to_numeric(
                                         weekly_new_df['download_count'], errors='coerce'
@@ -3242,7 +3367,7 @@ elif page == "🌳 衍生模型生态":
 
                                     st.dataframe(display_df, use_container_width=True, height=300)
                             else:
-                                st.info(f"✅ {ps_base} → {selected_date} 期间暂无新增衍生模型")
+                                st.info("✅ 本周暂无新增衍生模型")
 
                     st.markdown("---")
 
