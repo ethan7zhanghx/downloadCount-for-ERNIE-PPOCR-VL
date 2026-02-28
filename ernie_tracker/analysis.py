@@ -385,18 +385,18 @@ def calculate_weekly_report(current_date=None, previous_date=None, model_order=N
     def enforce_deduplication_and_standardization(df):
         if df.empty:
             return df
-        
-        # 1. 标准化 publisher 名称（统一大小写）
-        df['publisher'] = df['publisher'].astype(str).apply(lambda x: x.title() if x.lower() != 'nan' else x)
-        
-        # 2. 标准化模型名称（移除 publisher 前缀）
+
+        # 1. 标准化模型名称（移除 publisher 前缀）
         df = normalize_model_names(df)
-        
+
+        # 2. 创建小写 key 用于去重，但保留原始大小写
+        df['_dedup_publisher'] = df['publisher'].astype(str).str.lower()
+        df['_dedup_model_name'] = df['model_name'].astype(str).str.lower()
+
         # 3. 再次去重，确保同一 (date, repo, publisher, model_name) 只有一条记录，且下载量最大
-        # 按照 download_count 降序排序，然后保留每个分组的第一个
         df['download_count'] = pd.to_numeric(df['download_count'], errors='coerce').fillna(0)
         df = df.sort_values(by='download_count', ascending=False).drop_duplicates(
-            subset=['date', 'repo', 'publisher', 'model_name'], keep='first'
+            subset=['date', 'repo', '_dedup_publisher', '_dedup_model_name'], keep='first'
         )
         return df
 
@@ -1115,19 +1115,17 @@ def get_deleted_or_hidden_models(current_date, model_series='ERNIE-4.5'):
             return []
 
         # 3.5. 应用与周报相同的标准化逻辑
-        # 标准化 publisher 名称
-        historical_derivatives['publisher'] = historical_derivatives['publisher'].astype(str).apply(
-            lambda x: x.title() if x.lower() != 'nan' else x
-        )
-        if not current_derivatives.empty:
-            current_derivatives['publisher'] = current_derivatives['publisher'].astype(str).apply(
-                lambda x: x.title() if x.lower() != 'nan' else x
-            )
-
-        # 标准化模型名称
+        # 标准化模型名称（移除 publisher 前缀）
         historical_derivatives = normalize_model_names(historical_derivatives)
         if not current_derivatives.empty:
             current_derivatives = normalize_model_names(current_derivatives)
+
+        # 创建小写 key 用于去重
+        historical_derivatives['_dedup_publisher'] = historical_derivatives['publisher'].astype(str).str.lower()
+        historical_derivatives['_dedup_model_name'] = historical_derivatives['model_name'].astype(str).str.lower()
+        if not current_derivatives.empty:
+            current_derivatives['_dedup_publisher'] = current_derivatives['publisher'].astype(str).str.lower()
+            current_derivatives['_dedup_model_name'] = current_derivatives['model_name'].astype(str).str.lower()
 
         # 去重（按下载量降序，保留最高的）
         historical_derivatives['download_count'] = pd.to_numeric(
@@ -1136,7 +1134,7 @@ def get_deleted_or_hidden_models(current_date, model_series='ERNIE-4.5'):
         historical_derivatives = historical_derivatives.sort_values(
             by='download_count', ascending=False
         ).drop_duplicates(
-            subset=['date', 'repo', 'publisher', 'model_name'], keep='first'
+            subset=['date', 'repo', '_dedup_publisher', '_dedup_model_name'], keep='first'
         )
 
         if not current_derivatives.empty:
@@ -1146,21 +1144,21 @@ def get_deleted_or_hidden_models(current_date, model_series='ERNIE-4.5'):
             current_derivatives = current_derivatives.sort_values(
                 by='download_count', ascending=False
             ).drop_duplicates(
-                subset=['date', 'repo', 'publisher', 'model_name'], keep='first'
+                subset=['date', 'repo', '_dedup_publisher', '_dedup_model_name'], keep='first'
             )
 
-        # 4. 创建模型唯一标识 (repo, publisher, model_name)
+        # 4. 创建模型唯一标识（用小写 key）
         historical_derivatives['model_key'] = (
             historical_derivatives['repo'] + '|||' +
-            historical_derivatives['publisher'] + '|||' +
-            historical_derivatives['model_name']
+            historical_derivatives['_dedup_publisher'] + '|||' +
+            historical_derivatives['_dedup_model_name']
         )
 
         if not current_derivatives.empty:
             current_derivatives['model_key'] = (
                 current_derivatives['repo'] + '|||' +
-                current_derivatives['publisher'] + '|||' +
-                current_derivatives['model_name']
+                current_derivatives['_dedup_publisher'] + '|||' +
+                current_derivatives['_dedup_model_name']
             )
             current_keys = set(current_derivatives['model_key'].unique())
         else:
@@ -1183,22 +1181,23 @@ def get_deleted_or_hidden_models(current_date, model_series='ERNIE-4.5'):
         deleted_models_info = []
 
         for _, row in deleted_models.iterrows():
-            model_key_parts = row['model_key'].split('|||')
-            repo = model_key_parts[0]
-            publisher = model_key_parts[1]
-            model_name = model_key_parts[2]
+            repo = row.get('repo', '')
+            publisher = str(row.get('publisher', ''))
+            model_name = str(row.get('model_name', ''))
+            publisher_key = str(row.get('_dedup_publisher', publisher.lower()))
+            model_name_key = str(row.get('_dedup_model_name', model_name.lower()))
 
             # 查询该模型在数据库中最后出现的日期
-            # 使用 LOWER() 进行不区分大小写的匹配，因为标准化后的 publisher 可能与数据库中的原始值大小写不同
+            # 使用 LOWER() 进行不区分大小写匹配，避免大小写差异导致查不到最后记录
             conn = sqlite3.connect(DB_PATH)
             query = """
                 SELECT date, download_count
                 FROM model_downloads
-                WHERE repo = ? AND LOWER(publisher) = LOWER(?) AND model_name = ?
+                WHERE repo = ? AND LOWER(publisher) = LOWER(?) AND LOWER(model_name) = LOWER(?)
                 ORDER BY date DESC
                 LIMIT 1
             """
-            result = pd.read_sql_query(query, conn, params=(repo, publisher, model_name))
+            result = pd.read_sql_query(query, conn, params=(repo, publisher_key, model_name_key))
             conn.close()
 
             if not result.empty:
@@ -1263,16 +1262,17 @@ def analyze_derivative_models_all_platforms(df, selected_series=None):
     df = df.copy()
 
     # 🔴 标准化和去重（与 calculate_weekly_report 保持一致）
-    # 1. 标准化 publisher 名称（统一大小写）
-    df['publisher'] = df['publisher'].astype(str).apply(lambda x: x.title() if x.lower() != 'nan' else x)
-
-    # 2. 标准化模型名称（移除 publisher 前缀）
+    # 1. 标准化模型名称（移除 publisher 前缀）
     df = normalize_model_names(df)
+
+    # 2. 创建小写 key 用于去重，但保留原始大小写
+    df['_dedup_publisher'] = df['publisher'].astype(str).str.lower()
+    df['_dedup_model_name'] = df['model_name'].astype(str).str.lower()
 
     # 3. 再次去重，确保同一 (date, repo, publisher, model_name) 只有一条记录，且下载量最大
     df['download_count'] = pd.to_numeric(df['download_count'], errors='coerce').fillna(0)
     df = df.sort_values(by='download_count', ascending=False).drop_duplicates(
-        subset=['date', 'repo', 'publisher', 'model_name'], keep='first'
+        subset=['date', 'repo', '_dedup_publisher', '_dedup_model_name'], keep='first'
     )
 
     # 标记官方模型（如果还没有 is_official 列）
@@ -1458,11 +1458,13 @@ def calculate_periodic_stats(current_date, selected_series=None, base_date=None)
         if df.empty:
             return df
         df = df.copy()
-        df['publisher'] = df['publisher'].astype(str).apply(lambda x: x.title() if x.lower() != 'nan' else x)
         df = normalize_model_names(df)
         df['download_count'] = pd.to_numeric(df['download_count'], errors='coerce').fillna(0)
+        # 用小写 key 去重，但保留原始大小写
+        df['_dedup_publisher'] = df['publisher'].astype(str).str.lower()
+        df['_dedup_model_name'] = df['model_name'].astype(str).str.lower()
         df = df.sort_values(by='download_count', ascending=False).drop_duplicates(
-            subset=['date', 'repo', 'publisher', 'model_name'], keep='first'
+            subset=['date', 'repo', '_dedup_publisher', '_dedup_model_name'], keep='first'
         )
         return df
 
@@ -1525,30 +1527,34 @@ def calculate_periodic_stats(current_date, selected_series=None, base_date=None)
     # 累计数量
     total_count = len(current_derivatives)
 
+    # 用小写 key 做集合比较，避免大小写差异导致误判新增
+    def make_keys(df):
+        return set(zip(df['repo'], df['_dedup_publisher'], df['_dedup_model_name']))
+
     # 本周新增：在当前日期存在但上周不存在的模型
-    current_keys = set(zip(current_derivatives['repo'], current_derivatives['publisher'], current_derivatives['model_name']))
-    last_week_keys = set(zip(last_week_derivatives['repo'], last_week_derivatives['publisher'], last_week_derivatives['model_name']))
+    current_keys = make_keys(current_derivatives)
+    last_week_keys = make_keys(last_week_derivatives)
     weekly_new_keys = current_keys - last_week_keys
     weekly_new_count = len(weekly_new_keys)
 
     # 季度新增
-    quarter_start_keys = set(zip(quarter_start_derivatives['repo'], quarter_start_derivatives['publisher'], quarter_start_derivatives['model_name']))
+    quarter_start_keys = make_keys(quarter_start_derivatives)
     quarter_new_keys = current_keys - quarter_start_keys
     quarter_new_count = len(quarter_new_keys)
 
-    # 本周新增模型列表
+    # 本周新增模型列表（用小写 key 匹配，但返回原始大小写的数据）
     weekly_new_models = []
-    for repo, publisher, model_name in weekly_new_keys:
+    for repo, pub_lower, name_lower in weekly_new_keys:
         model_row = current_derivatives[
             (current_derivatives['repo'] == repo) &
-            (current_derivatives['publisher'] == publisher) &
-            (current_derivatives['model_name'] == model_name)
+            (current_derivatives['_dedup_publisher'] == pub_lower) &
+            (current_derivatives['_dedup_model_name'] == name_lower)
         ].iloc[0]
 
         weekly_new_models.append({
             'repo': repo,
-            'publisher': publisher,
-            'model_name': model_name,
+            'publisher': model_row['publisher'],
+            'model_name': model_row['model_name'],
             'download_count': int(model_row.get('download_count', 0)),
             'model_category': model_row.get('model_category', ''),
             'model_type': model_row.get('model_type', ''),
@@ -1567,9 +1573,9 @@ def calculate_periodic_stats(current_date, selected_series=None, base_date=None)
             cat_last_week = last_week_derivatives[last_week_derivatives['model_category'] == category]
             cat_quarter_start = quarter_start_derivatives[quarter_start_derivatives['model_category'] == category]
 
-            cat_current_keys = set(zip(cat_current['repo'], cat_current['publisher'], cat_current['model_name']))
-            cat_last_week_keys = set(zip(cat_last_week['repo'], cat_last_week['publisher'], cat_last_week['model_name']))
-            cat_quarter_start_keys = set(zip(cat_quarter_start['repo'], cat_quarter_start['publisher'], cat_quarter_start['model_name']))
+            cat_current_keys = make_keys(cat_current)
+            cat_last_week_keys = make_keys(cat_last_week)
+            cat_quarter_start_keys = make_keys(cat_quarter_start)
 
             stats_by_series[category] = {
                 'total_count': len(cat_current),
@@ -1627,17 +1633,16 @@ def get_deleted_derivative_models_all_platforms(current_date, selected_series=No
             if df.empty:
                 return df
             df = df.copy()
-            # 标准化 publisher
-            df['publisher'] = df['publisher'].astype(str).apply(
-                lambda x: x.title() if x.lower() != 'nan' else x
-            )
-            # 标准化模型名称
+            # 标准化模型名称（移除 publisher 前缀）
             df = normalize_model_names(df)
+            # 创建小写 key 用于去重
+            df['_dedup_publisher'] = df['publisher'].astype(str).str.lower()
+            df['_dedup_model_name'] = df['model_name'].astype(str).str.lower()
             # 转换下载量为数字
             df['download_count'] = pd.to_numeric(df['download_count'], errors='coerce').fillna(0)
             # 去重（按下载量降序，保留最高的）
             df = df.sort_values(by='download_count', ascending=False).drop_duplicates(
-                subset=['date', 'repo', 'publisher', 'model_name'], keep='first'
+                subset=['date', 'repo', '_dedup_publisher', '_dedup_model_name'], keep='first'
             )
             return df
 
@@ -1666,18 +1671,18 @@ def get_deleted_derivative_models_all_platforms(current_date, selected_series=No
         if historical_derivatives.empty:
             return []
 
-        # 7. 创建模型唯一标识 (repo, publisher, model_name)
+        # 7. 创建模型唯一标识（用小写 key）
         historical_derivatives['model_key'] = (
             historical_derivatives['repo'] + '|||' +
-            historical_derivatives['publisher'] + '|||' +
-            historical_derivatives['model_name']
+            historical_derivatives['_dedup_publisher'] + '|||' +
+            historical_derivatives['_dedup_model_name']
         )
 
         if not current_derivatives.empty:
             current_derivatives['model_key'] = (
                 current_derivatives['repo'] + '|||' +
-                current_derivatives['publisher'] + '|||' +
-                current_derivatives['model_name']
+                current_derivatives['_dedup_publisher'] + '|||' +
+                current_derivatives['_dedup_model_name']
             )
             current_keys = set(current_derivatives['model_key'].unique())
         else:
@@ -1700,21 +1705,22 @@ def get_deleted_derivative_models_all_platforms(current_date, selected_series=No
         deleted_models_info = []
 
         for _, row in deleted_models.iterrows():
-            model_key_parts = row['model_key'].split('|||')
-            repo = model_key_parts[0]
-            publisher = model_key_parts[1]
-            model_name = model_key_parts[2]
+            repo = row.get('repo', '')
+            publisher = str(row.get('publisher', ''))
+            model_name = str(row.get('model_name', ''))
+            publisher_key = str(row.get('_dedup_publisher', publisher.lower()))
+            model_name_key = str(row.get('_dedup_model_name', model_name.lower()))
 
             # 查询该模型在数据库中最后出现的日期
             conn = sqlite3.connect(DB_PATH)
             query = """
                 SELECT date, download_count
                 FROM model_downloads
-                WHERE repo = ? AND LOWER(publisher) = LOWER(?) AND model_name = ?
+                WHERE repo = ? AND LOWER(publisher) = LOWER(?) AND LOWER(model_name) = LOWER(?)
                 ORDER BY date DESC
                 LIMIT 1
             """
-            result = pd.read_sql_query(query, conn, params=(repo, publisher, model_name))
+            result = pd.read_sql_query(query, conn, params=(repo, publisher_key, model_name_key))
             conn.close()
 
             if not result.empty:
@@ -1783,13 +1789,13 @@ def get_models_needing_backfill(current_date, selected_series=None):
 
         # 2. 应用标准化和去重
         current_data = current_data.copy()
-        current_data['publisher'] = current_data['publisher'].astype(str).apply(
-            lambda x: x.title() if x.lower() != 'nan' else x
-        )
         current_data = normalize_model_names(current_data)
+        # 创建小写 key 用于去重
+        current_data['_dedup_publisher'] = current_data['publisher'].astype(str).str.lower()
+        current_data['_dedup_model_name'] = current_data['model_name'].astype(str).str.lower()
         current_data['download_count'] = pd.to_numeric(current_data['download_count'], errors='coerce').fillna(0)
         current_data = current_data.sort_values(by='download_count', ascending=False).drop_duplicates(
-            subset=['date', 'repo', 'publisher', 'model_name'], keep='first'
+            subset=['date', 'repo', '_dedup_publisher', '_dedup_model_name'], keep='first'
         )
 
         # 3. 标记官方模型并筛选衍生模型
@@ -1822,7 +1828,7 @@ def get_models_needing_backfill(current_date, selected_series=None):
             query = """
                 SELECT MAX(download_count) as max_count, date
                 FROM model_downloads
-                WHERE repo = ? AND LOWER(publisher) = LOWER(?) AND model_name = ?
+                WHERE repo = ? AND LOWER(publisher) = LOWER(?) AND LOWER(model_name) = LOWER(?)
                 GROUP BY repo, publisher, model_name
                 ORDER BY max_count DESC
                 LIMIT 1
@@ -1839,7 +1845,7 @@ def get_models_needing_backfill(current_date, selected_series=None):
                             SELECT date
                             FROM model_downloads
                             WHERE repo = ? AND LOWER(publisher) = LOWER(?)
-                                  AND model_name = ? AND download_count = ?
+                                  AND LOWER(model_name) = LOWER(?) AND download_count = ?
                             ORDER BY date DESC
                             LIMIT 1
                         """

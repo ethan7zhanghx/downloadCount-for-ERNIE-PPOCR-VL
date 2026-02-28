@@ -3455,23 +3455,27 @@ elif page == "🌳 衍生模型生态":
 
                         if not raw_df.empty and not filtered_derivatives.empty:
                             # 对 raw_df 做和 analyze_derivative_models_all_platforms 一样的标准化处理
-                            # 1. 标准化 publisher 名称
-                            raw_df['publisher'] = raw_df['publisher'].astype(str).apply(
-                                lambda x: x.title() if x.lower() != 'nan' else x
-                            )
-                            # 2. 标准化模型名称（移除 publisher 前缀）
+                            # 1. 标准化模型名称（移除 publisher 前缀）
                             raw_df = normalize_model_names(raw_df)
+                            # 2. 构建大小写无关 key，避免 publisher/model_name 大小写导致首次日期合并失败
+                            raw_df['_dedup_publisher'] = raw_df['publisher'].astype(str).str.lower()
+                            raw_df['_dedup_model_name'] = raw_df['model_name'].astype(str).str.lower()
+
+                            if '_dedup_publisher' not in filtered_derivatives.columns:
+                                filtered_derivatives['_dedup_publisher'] = filtered_derivatives['publisher'].astype(str).str.lower()
+                            if '_dedup_model_name' not in filtered_derivatives.columns:
+                                filtered_derivatives['_dedup_model_name'] = filtered_derivatives['model_name'].astype(str).str.lower()
 
                             # 按模型分组，获取首次出现的日期
                             first_seen_df = raw_df.groupby(
-                                ['repo', 'publisher', 'model_name']
+                                ['repo', '_dedup_publisher', '_dedup_model_name']
                             )['date'].min().reset_index()
-                            first_seen_df.columns = ['repo', 'publisher', 'model_name', 'first_seen_date']
+                            first_seen_df.columns = ['repo', '_dedup_publisher', '_dedup_model_name', 'first_seen_date']
 
                             # 合并首次入库日期
                             filtered_derivatives = filtered_derivatives.merge(
                                 first_seen_df,
-                                on=['repo', 'publisher', 'model_name'],
+                                on=['repo', '_dedup_publisher', '_dedup_model_name'],
                                 how='left'
                             )
 
