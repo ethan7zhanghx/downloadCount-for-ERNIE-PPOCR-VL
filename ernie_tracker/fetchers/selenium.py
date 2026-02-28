@@ -597,8 +597,9 @@ class AIStudioFetcher(BaseFetcher):
                                 if model_name.startswith("PaddlePaddle/"):
                                     model_name = model_name[len("PaddlePaddle/"):]
 
-                                # 检查是否需要点击获取详细信息
-                                model_key = f"{publisher}/{model_name}"
+                                # 统一 publisher 大小写用于 URL 查找
+                                lookup_publisher = "PaddlePaddle" if publisher.lower() == "paddlepaddle" else publisher
+                                model_key = f"{lookup_publisher}/{model_name}"
                                 existing_url = existing_models_with_url.get(model_key)
                                 has_url = existing_url is not None
                                 needs_precise_count = self._is_simplified_count(usage_count)
@@ -672,9 +673,10 @@ class AIStudioFetcher(BaseFetcher):
                                 # 如果模型名称以PaddlePaddle/开头，提取出真正的模型名
                                 if model_name.startswith("PaddlePaddle/"):
                                     model_name = model_name[len("PaddlePaddle/"):]
-                                    # 确保publisher是PaddlePaddle
-                                    if publisher not in ["PaddlePaddle", "PaddleOCR-VL"]:
-                                        publisher = "PaddlePaddle"
+
+                                # 统一 publisher 大小写：AI Studio 页面可能返回 "Paddlepaddle"
+                                if publisher.lower() == "paddlepaddle":
+                                    publisher = "PaddlePaddle"
 
                                 # 修复重复的PaddlePaddle路径问题
                                 if publisher.startswith("PaddlePaddle/PaddlePaddle/"):
