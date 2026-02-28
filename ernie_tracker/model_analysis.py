@@ -138,16 +138,25 @@ def normalize_base_models(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, int
     # 专门修复 PaddleOCR-VL 被误判成 ERNIE-4.5 的情况
     paddle_base = OFFICIAL_MODEL_GROUPS['PaddleOCR-VL']['models'][0]
 
+    def contains_paddleocr_vl(value) -> bool:
+        s = str(value or '').lower()
+        compact = re.sub(r'[^a-z0-9]+', '', s)
+        return (
+            'paddleocr-vl' in s
+            or 'paddleocrvl' in compact
+            or ('paddleocr' in compact and 'vl' in compact)
+        )
+
     def is_paddleocr(row):
         name = str(row.get('model_name', '')).lower()
         category = str(row.get('model_category', '')).lower()
         base = str(row.get('base_model') or '').lower()
         publisher = str(row.get('publisher', '')).lower()
         return (
-            'paddleocr-vl' in name
-            or 'paddleocr-vl' in category
-            or 'paddleocr-vl' in base
-            or publisher == 'paddleocr-vl'
+            contains_paddleocr_vl(name)
+            or contains_paddleocr_vl(category)
+            or contains_paddleocr_vl(base)
+            or contains_paddleocr_vl(publisher)
         )
 
     paddle_mask = normalized_df.apply(is_paddleocr, axis=1)
@@ -185,6 +194,7 @@ def infer_base_model_from_name(model_name: str, publisher: str, full_model_id: s
 
     # 将模型名称转为小写便于匹配
     model_lower = full_model_id.lower()
+    model_compact = re.sub(r'[^a-z0-9]+', '', model_lower)
 
     # 按优先级匹配（从具体到一般）
     # 1. 先匹配 Thinking 模型（优先级最高）
@@ -232,7 +242,7 @@ def infer_base_model_from_name(model_name: str, publisher: str, full_model_id: s
             return 'baidu/ERNIE-4.5-0.3B-PT'
 
     # PaddleOCR-VL
-    if 'paddleocr' in model_lower and 'vl' in model_lower:
+    if ('paddleocr' in model_lower and 'vl' in model_lower) or ('paddleocr' in model_compact and 'vl' in model_compact):
         return 'PaddlePaddle/PaddleOCR-VL'
 
     # 无法推断

@@ -3,6 +3,7 @@
 """
 from abc import ABC, abstractmethod
 from datetime import date, datetime
+import re
 import pandas as pd
 from ..config import SEARCH_QUERY
 
@@ -19,17 +20,23 @@ def classify_model_category(model_name, search_keyword=None):
         str: 'ernie-4.5', 'paddleocr-vl', 或 'other'
     """
     model_name_lower = str(model_name).lower()
+    model_name_compact = re.sub(r'[^a-z0-9]+', '', model_name_lower)
 
     # 1. 优先使用 search_keyword
     if search_keyword:
         sk_upper = str(search_keyword).upper()
+        sk_compact = re.sub(r'[^A-Z0-9]+', '', sk_upper)
         if 'ERNIE-4.5' in sk_upper or sk_upper == 'ERNIE-4.5':
             return 'ernie-4.5'
-        elif 'PADDLEOCR-VL' in sk_upper or sk_upper == 'PaddleOCR-VL':
+        elif 'PADDLEOCR-VL' in sk_upper or 'PADDLEOCRVL' in sk_compact:
             return 'paddleocr-vl'
 
     # 2. 使用模型名称判断
-    if 'paddleocr-vl' in model_name_lower or 'paddleocrvl' in model_name_lower:
+    if (
+        'paddleocr-vl' in model_name_lower
+        or 'paddleocrvl' in model_name_compact
+        or ('paddleocr' in model_name_compact and 'vl' in model_name_compact)
+    ):
         return 'paddleocr-vl'
     elif 'ernie' in model_name_lower or '文心' in model_name_lower:
         return 'ernie-4.5'  # 所有 ERNIE 相关都归入 ernie-4.5

@@ -28,8 +28,11 @@ def classify_model(model_name: str, publisher: str, base_model: str = None) -> s
     仅返回两类：ernie-4.5 或 paddleocr-vl。其余一律归入 ernie-4.5（避免出现 other/other-ernie）。
     """
     def _is_paddleocr(name: str) -> bool:
-        n = name.lower()
-        return 'paddleocr' in n and 'vl' in n
+        if not name:
+            return False
+        n = str(name).lower()
+        compact = re.sub(r'[^a-z0-9]+', '', n)
+        return ('paddleocr' in n and 'vl' in n) or ('paddleocr' in compact and 'vl' in compact)
 
     base_lower = base_model.lower() if base_model else ''
     name_lower = model_name.lower()
