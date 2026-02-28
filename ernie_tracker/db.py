@@ -25,6 +25,65 @@ def _clean_override_value(value):
     return None if value_str.lower() in {"", "none", "nan"} else value_str
 
 
+def _construct_huggingface_url(publisher, model_name):
+    """根据 publisher/model_name 构造 Hugging Face 模型 URL"""
+    publisher_val = str(publisher or "").strip().strip("/")
+    model_name_val = str(model_name or "").strip().strip("/")
+    if not publisher_val or not model_name_val:
+        return None
+
+    # 避免 model_name 已包含 publisher 前缀时出现重复路径
+    prefix = f"{publisher_val}/"
+    if model_name_val.lower().startswith(prefix.lower()):
+        model_name_val = model_name_val[len(prefix):]
+    if not model_name_val:
+        return None
+
+    return f"https://huggingface.co/{publisher_val}/{model_name_val}"
+
+
+def _ensure_huggingface_urls(df):
+    """
+    补全 Hugging Face 缺失 URL：
+    https://huggingface.co/{publisher}/{model_name}
+    """
+    if df is None or df.empty:
+        return df
+
+    required_cols = {"repo", "publisher", "model_name"}
+    if not required_cols.issubset(df.columns):
+        return df
+
+    fixed_df = df.copy()
+    if "url" not in fixed_df.columns:
+        fixed_df["url"] = None
+
+    repo_mask = fixed_df["repo"].astype(str).str.strip().str.lower() == "hugging face"
+    missing_url_mask = (
+        fixed_df["url"].isna()
+        | fixed_df["url"].astype(str).str.strip().str.lower().isin(["", "none", "nan"])
+    )
+    has_id_mask = (
+        fixed_df["publisher"].notna()
+        & fixed_df["model_name"].notna()
+        & fixed_df["publisher"].astype(str).str.strip().str.lower().ne("")
+        & fixed_df["publisher"].astype(str).str.strip().str.lower().ne("none")
+        & fixed_df["publisher"].astype(str).str.strip().str.lower().ne("nan")
+        & fixed_df["model_name"].astype(str).str.strip().str.lower().ne("")
+        & fixed_df["model_name"].astype(str).str.strip().str.lower().ne("none")
+        & fixed_df["model_name"].astype(str).str.strip().str.lower().ne("nan")
+    )
+
+    target_mask = repo_mask & missing_url_mask & has_id_mask
+    if target_mask.any():
+        fixed_df.loc[target_mask, "url"] = fixed_df.loc[target_mask].apply(
+            lambda row: _construct_huggingface_url(row["publisher"], row["model_name"]),
+            axis=1
+        )
+
+    return fixed_df
+
+
 def init_database():
     """初始化数据库表"""
     conn = sqlite3.connect(DB_PATH)
@@ -410,6 +469,7 @@ def save_to_db(df, db_path=DB_PATH):
     init_database()
 
     df_to_save = apply_model_field_overrides(df, db_path=db_path)
+    df_to_save = _ensure_huggingface_urls(df_to_save)
     conn = sqlite3.connect(db_path)
 
     # 直接插入所有数据，不做去重
@@ -592,6 +652,9 @@ def load_data_from_db(date_filter=None, platform_filter=None, last_value_per_mod
             df['base_model'] = df['base_model'].apply(
                 lambda v: None if str(v).strip().lower() in ['', 'none', 'nan'] else v
             )
+
+        # 动态补全历史数据中的 Hugging Face 缺失 URL
+        df = _ensure_huggingface_urls(df)
 
         return df
 
