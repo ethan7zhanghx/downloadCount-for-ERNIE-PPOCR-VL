@@ -1,10 +1,28 @@
 """数据库操作模块"""
 import sqlite3
 import pandas as pd
+import re
 from datetime import date, datetime
 from .config import DB_PATH, DATA_TABLE, STATS_TABLE
 
 CUSTOM_MODELS_TABLE = "custom_models"
+MODEL_FIELD_OVERRIDES_TABLE = "model_field_overrides"
+OVERRIDABLE_FIELDS = ["model_category", "model_type", "base_model", "tags"]
+
+
+def _normalize_override_key(value):
+    """标准化覆盖规则的匹配键（用于大小写无关匹配）"""
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
+def _clean_override_value(value):
+    """清理覆盖字段值，空值统一为 None"""
+    if value is None:
+        return None
+    value_str = str(value).strip()
+    return None if value_str.lower() in {"", "none", "nan"} else value_str
 
 
 def init_database():
@@ -106,8 +124,269 @@ def init_database():
     except Exception as e:
         print(f"更新 custom_models 表结构时出错: {e}")
 
+    # 模型字段覆盖规则表：用于手动修正后续抓取入库字段
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS {MODEL_FIELD_OVERRIDES_TABLE} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo TEXT NOT NULL,
+            publisher TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            repo_key TEXT NOT NULL,
+            publisher_key TEXT NOT NULL,
+            model_name_key TEXT NOT NULL,
+            model_category TEXT,
+            model_type TEXT,
+            base_model TEXT,
+            tags TEXT,
+            updated_at TEXT NOT NULL,
+            UNIQUE(repo_key, publisher_key, model_name_key)
+        )
+    """)
+
+    # 检查并添加 model_field_overrides 表缺失列（兼容已有库）
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"PRAGMA table_info({MODEL_FIELD_OVERRIDES_TABLE})")
+        override_columns = [column[1] for column in cursor.fetchall()]
+
+        for missing in [
+            'repo',
+            'publisher',
+            'model_name',
+            'repo_key',
+            'publisher_key',
+            'model_name_key',
+            'model_category',
+            'model_type',
+            'base_model',
+            'tags',
+            'updated_at',
+        ]:
+            if missing not in override_columns:
+                conn.execute(f"ALTER TABLE {MODEL_FIELD_OVERRIDES_TABLE} ADD COLUMN {missing} TEXT")
+
+        # 尝试创建唯一索引（如果已存在会被忽略）
+        conn.execute(f"""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_{MODEL_FIELD_OVERRIDES_TABLE}_key
+            ON {MODEL_FIELD_OVERRIDES_TABLE}(repo_key, publisher_key, model_name_key)
+        """)
+    except Exception as e:
+        print(f"更新 {MODEL_FIELD_OVERRIDES_TABLE} 表结构时出错: {e}")
+
     conn.commit()
     conn.close()
+
+
+def get_model_field_overrides(limit=500):
+    """
+    获取模型字段覆盖规则列表（按更新时间倒序）
+
+    Args:
+        limit: 返回条数上限
+
+    Returns:
+        DataFrame: 覆盖规则
+    """
+    try:
+        init_database()
+        conn = sqlite3.connect(DB_PATH)
+        query = f"""
+            SELECT id, repo, publisher, model_name, model_category, model_type, base_model, tags, updated_at
+            FROM {MODEL_FIELD_OVERRIDES_TABLE}
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """
+        df = pd.read_sql_query(query, conn, params=(int(limit),))
+        conn.close()
+        return df
+    except Exception as e:
+        print(f"读取覆盖规则失败: {e}")
+        return pd.DataFrame()
+
+
+def upsert_model_field_override(
+    repo,
+    publisher,
+    model_name,
+    model_category=None,
+    model_type=None,
+    base_model=None,
+    tags=None
+):
+    """
+    新增/更新模型字段覆盖规则（后续抓取入库自动应用）
+
+    匹配键：repo + publisher + model_name（大小写无关）
+    覆盖字段：model_category / model_type / base_model / tags
+
+    Returns:
+        tuple: (success, message)
+    """
+    try:
+        init_database()
+
+        repo_val = str(repo).strip() if repo is not None else ""
+        publisher_val = str(publisher).strip() if publisher is not None else ""
+        model_name_val = str(model_name).strip() if model_name is not None else ""
+
+        if not repo_val or not publisher_val or not model_name_val:
+            return False, "保存覆盖规则失败：平台、发布者、模型名称不能为空"
+
+        payload = {
+            "model_category": _clean_override_value(model_category),
+            "model_type": _clean_override_value(model_type),
+            "base_model": _clean_override_value(base_model),
+            "tags": _clean_override_value(tags),
+        }
+
+        if not any(value is not None for value in payload.values()):
+            return False, "保存覆盖规则失败：至少需要指定一个静态字段（分类/类型/base_model/tags）"
+
+        repo_key = _normalize_override_key(repo_val)
+        publisher_key = _normalize_override_key(publisher_val)
+        model_name_key = _normalize_override_key(model_name_val)
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute(f"""
+            SELECT id
+            FROM {MODEL_FIELD_OVERRIDES_TABLE}
+            WHERE repo_key = ? AND publisher_key = ? AND model_name_key = ?
+        """, (repo_key, publisher_key, model_name_key))
+        existing = cursor.fetchone()
+
+        if existing:
+            cursor.execute(f"""
+                UPDATE {MODEL_FIELD_OVERRIDES_TABLE}
+                SET repo = ?, publisher = ?, model_name = ?,
+                    model_category = ?, model_type = ?, base_model = ?, tags = ?,
+                    updated_at = ?
+                WHERE id = ?
+            """, (
+                repo_val, publisher_val, model_name_val,
+                payload["model_category"], payload["model_type"], payload["base_model"], payload["tags"],
+                now_str,
+                existing[0]
+            ))
+            action = "更新"
+        else:
+            cursor.execute(f"""
+                INSERT INTO {MODEL_FIELD_OVERRIDES_TABLE}
+                (
+                    repo, publisher, model_name,
+                    repo_key, publisher_key, model_name_key,
+                    model_category, model_type, base_model, tags, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                repo_val, publisher_val, model_name_val,
+                repo_key, publisher_key, model_name_key,
+                payload["model_category"], payload["model_type"], payload["base_model"], payload["tags"],
+                now_str
+            ))
+            action = "新增"
+
+        conn.commit()
+        conn.close()
+        return True, f"已{action}覆盖规则：{repo_val} / {publisher_val} / {model_name_val}"
+
+    except Exception as e:
+        return False, f"保存覆盖规则失败: {str(e)}"
+
+
+def delete_model_field_override(override_id):
+    """
+    删除模型字段覆盖规则
+
+    Args:
+        override_id: 覆盖规则 ID
+
+    Returns:
+        tuple: (success, message)
+    """
+    try:
+        init_database()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(f"DELETE FROM {MODEL_FIELD_OVERRIDES_TABLE} WHERE id = ?", (override_id,))
+        affected = cursor.rowcount
+        conn.commit()
+        conn.close()
+        if affected > 0:
+            return True, f"已删除覆盖规则 (id={override_id})"
+        return False, f"未找到覆盖规则 (id={override_id})"
+    except Exception as e:
+        return False, f"删除覆盖规则失败: {str(e)}"
+
+
+def apply_model_field_overrides(df, db_path=DB_PATH):
+    """
+    对待入库数据应用模型字段覆盖规则
+
+    仅覆盖静态字段：model_category / model_type / base_model / tags
+    不覆盖时变字段（如 download_count/date 等）。
+    """
+    if df is None or df.empty:
+        return df
+
+    required_cols = {'repo', 'publisher', 'model_name'}
+    if not required_cols.issubset(df.columns):
+        return df
+
+    conn = sqlite3.connect(db_path)
+    try:
+        overrides_df = pd.read_sql_query(f"""
+            SELECT
+                repo_key, publisher_key, model_name_key,
+                model_category, model_type, base_model, tags
+            FROM {MODEL_FIELD_OVERRIDES_TABLE}
+        """, conn)
+    except Exception:
+        conn.close()
+        return df
+    conn.close()
+
+    if overrides_df.empty:
+        return df
+
+    result_df = df.copy()
+    result_df['_ov_repo_key'] = result_df['repo'].apply(_normalize_override_key)
+    result_df['_ov_publisher_key'] = result_df['publisher'].apply(_normalize_override_key)
+    result_df['_ov_model_name_key'] = result_df['model_name'].apply(_normalize_override_key)
+
+    overrides_for_merge = overrides_df.rename(columns={
+        'repo_key': '_ov_repo_key',
+        'publisher_key': '_ov_publisher_key',
+        'model_name_key': '_ov_model_name_key',
+        'model_category': '_ov_model_category',
+        'model_type': '_ov_model_type',
+        'base_model': '_ov_base_model',
+        'tags': '_ov_tags',
+    })
+
+    merged_df = result_df.merge(
+        overrides_for_merge,
+        on=['_ov_repo_key', '_ov_publisher_key', '_ov_model_name_key'],
+        how='left'
+    )
+
+    for field in OVERRIDABLE_FIELDS:
+        override_col = f"_ov_{field}"
+        if field not in merged_df.columns:
+            merged_df[field] = None
+        if override_col in merged_df.columns:
+            has_override = merged_df[override_col].notna() & merged_df[override_col].astype(str).str.strip().ne('')
+            merged_df.loc[has_override, field] = merged_df.loc[has_override, override_col]
+
+    drop_cols = [
+        '_ov_repo_key', '_ov_publisher_key', '_ov_model_name_key',
+        '_ov_model_category', '_ov_model_type', '_ov_base_model', '_ov_tags'
+    ]
+    merged_df = merged_df.drop(columns=[col for col in drop_cols if col in merged_df.columns])
+
+    return merged_df
 
 
 def save_to_db(df, db_path=DB_PATH):
@@ -116,6 +395,7 @@ def save_to_db(df, db_path=DB_PATH):
 
     策略：
     - 所有数据直接入库，保持完整性
+    - 入库前自动应用模型字段覆盖规则（model_category / model_type / base_model / tags）
     - 去重和取最大值在查询时动态处理（load_data_from_db）
     - 这样既保留了历史数据，又避免复杂的合并逻辑
 
@@ -123,11 +403,18 @@ def save_to_db(df, db_path=DB_PATH):
         df: 要保存的 DataFrame
         db_path: 数据库路径
     """
+    if df is None or len(df) == 0:
+        print("没有可保存的数据")
+        return
+
+    init_database()
+
+    df_to_save = apply_model_field_overrides(df, db_path=db_path)
     conn = sqlite3.connect(db_path)
 
     # 直接插入所有数据，不做去重
-    df.to_sql(DATA_TABLE, conn, if_exists="append", index=False)
-    print(f"成功保存 {len(df)} 条记录到数据库（原始数据，未去重）")
+    df_to_save.to_sql(DATA_TABLE, conn, if_exists="append", index=False)
+    print(f"成功保存 {len(df_to_save)} 条记录到数据库（已应用覆盖规则，原始数据未去重）")
 
     conn.close()
 
@@ -239,13 +526,14 @@ def load_data_from_db(date_filter=None, platform_filter=None, last_value_per_mod
             where_clause = "WHERE " + " AND ".join(conditions)
 
         # 构建基础去重（同日同模型取最优记录）
+        # 使用 LOWER() 归一化 publisher 和 model_name，避免大小写不一致导致重复
         base_cte = f"""
             WITH ranked AS (
                 SELECT
                     *,
                     rowid AS _rowid_,
                     ROW_NUMBER() OVER (
-                        PARTITION BY date, repo, publisher, model_name
+                        PARTITION BY date, repo, LOWER(publisher), LOWER(model_name)
                         ORDER BY
                             (COALESCE(base_model, base_model_from_api) IS NOT NULL
                              AND TRIM(COALESCE(base_model, base_model_from_api)) != ''
@@ -274,7 +562,7 @@ def load_data_from_db(date_filter=None, platform_filter=None, last_value_per_mod
                 SELECT
                     *,
                     ROW_NUMBER() OVER (
-                        PARTITION BY repo, publisher, model_name
+                        PARTITION BY repo, LOWER(publisher), LOWER(model_name)
                         ORDER BY DATE(date) DESC, _rowid_ DESC
                     ) AS rn_last
                 FROM best_per_day
@@ -393,7 +681,12 @@ def add_custom_model(url, model_category=None):
     if model_category is None:
         # 使用 backfill 脚本的逻辑
         name_lower = str(model_name or model_id).lower()
-        if 'paddleocr-vl' in name_lower or 'paddleocrvl' in name_lower:
+        name_compact = re.sub(r'[^a-z0-9]+', '', name_lower)
+        if (
+            'paddleocr-vl' in name_lower
+            or 'paddleocrvl' in name_compact
+            or ('paddleocr' in name_compact and 'vl' in name_compact)
+        ):
             model_category = 'paddleocr-vl'
         elif 'ernie' in name_lower or '文心' in name_lower:
             model_category = 'ernie-4.5'  # 所有 ERNIE 相关都归入 ernie-4.5

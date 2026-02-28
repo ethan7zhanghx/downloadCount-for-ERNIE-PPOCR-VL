@@ -2415,9 +2415,49 @@ elif page == "🗄️ 数据库管理":
     # ========== Tab 7: 数据编辑 ==========
     with tab7:
         from ernie_tracker.db_manager import search_records, get_record_by_rowid, update_record, delete_record_by_rowid
+        from ernie_tracker.db import (
+            upsert_model_field_override,
+            get_model_field_overrides,
+            delete_model_field_override,
+        )
 
         st.markdown("### ✏️ 数据编辑")
         st.info("💡 搜索并编辑数据库中的记录")
+
+        if st.session_state.get('edit_post_notices'):
+            for level, msg in st.session_state.get('edit_post_notices', []):
+                if level == 'warning':
+                    st.warning(msg)
+                else:
+                    st.success(msg)
+            del st.session_state['edit_post_notices']
+
+        with st.expander("🧩 模型字段覆盖规则（后续抓取自动沿用）", expanded=False):
+            st.caption("覆盖规则只作用于静态字段：`model_category` / `model_type` / `base_model` / `tags`。不会覆盖下载量等时变字段。")
+
+            overrides_df = get_model_field_overrides(limit=500)
+            if overrides_df.empty:
+                st.info("当前没有已保存的覆盖规则。")
+            else:
+                st.dataframe(overrides_df, use_container_width=True, height=240)
+
+                col_rule1, col_rule2 = st.columns([3, 1])
+                with col_rule1:
+                    delete_override_id = st.selectbox(
+                        "选择要删除的覆盖规则 ID",
+                        options=overrides_df['id'].tolist(),
+                        key="delete_override_id"
+                    )
+                with col_rule2:
+                    st.write("")
+                    st.write("")
+                    if st.button("🗑️ 删除规则", use_container_width=True, key="delete_override_btn"):
+                        ok, msg = delete_model_field_override(delete_override_id)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
 
         # 搜索区域
         st.markdown("#### 🔍 搜索记录")
@@ -2629,6 +2669,7 @@ elif page == "🗄️ 数据库管理":
                         )
 
                         st.markdown("---")
+                        st.caption("提示：保存时若检测到静态字段（模型分类/类型/base_model/tags）发生变化，会自动更新覆盖规则，后续爬取将沿用该设置。")
 
                         # 操作按钮
                         col_btn1, col_btn2, col_btn3 = st.columns([2, 1, 1])
@@ -2640,6 +2681,19 @@ elif page == "🗄️ 数据库管理":
                                 model_type_value = edit_model_type if edit_model_type else None
                                 model_category_value = edit_model_category if edit_model_category else None
                                 tags_value = edit_tags if edit_tags else None
+
+                                def _norm_static(v):
+                                    if v is None:
+                                        return None
+                                    s = str(v).strip()
+                                    return None if s.lower() in ("", "none", "nan") else s
+
+                                static_changed = any([
+                                    _norm_static(record.get('base_model')) != _norm_static(base_model_value),
+                                    _norm_static(record.get('model_type')) != _norm_static(model_type_value),
+                                    _norm_static(record.get('model_category')) != _norm_static(model_category_value),
+                                    _norm_static(record.get('tags')) != _norm_static(tags_value),
+                                ])
 
                                 with st.spinner("正在保存..."):
                                     success, message = update_record(
@@ -2656,7 +2710,24 @@ elif page == "🗄️ 数据库管理":
                                     )
 
                                 if success:
-                                    st.success(f"✅ {message}")
+                                    post_notices = [("success", f"✅ {message}")]
+
+                                    if static_changed:
+                                        override_ok, override_msg = upsert_model_field_override(
+                                            repo=edit_repo,
+                                            publisher=edit_publisher,
+                                            model_name=edit_model_name,
+                                            model_category=model_category_value,
+                                            model_type=model_type_value,
+                                            base_model=base_model_value,
+                                            tags=tags_value,
+                                        )
+                                        if override_ok:
+                                            post_notices.append(("success", f"🧩 {override_msg}"))
+                                        else:
+                                            post_notices.append(("warning", f"🧩 {override_msg}"))
+
+                                    st.session_state['edit_post_notices'] = post_notices
                                     # 清除编辑状态
                                     if 'editing_record' in st.session_state:
                                         del st.session_state['editing_record']
