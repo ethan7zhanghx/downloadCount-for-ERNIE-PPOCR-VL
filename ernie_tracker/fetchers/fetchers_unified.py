@@ -470,7 +470,8 @@ def fetch_gitcode_data_unified(progress_callback=None, progress_total=None):
 
     df = pd.DataFrame(
         results,
-        columns=["date", "repo", "model_name", "publisher", "download_count", "url"]
+        columns=["date", "repo", "model_name", "publisher", "download_count",
+                 "model_category", "url", "last_modified", "created_at"]
     )
     df['download_count'] = pd.to_numeric(df['download_count'], errors='coerce').fillna(0).astype(int)
     return df, total_count
