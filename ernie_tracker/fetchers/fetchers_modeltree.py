@@ -219,6 +219,24 @@ def _classify_by_name_fallback(model_name: str) -> str:
     return 'other'
 
 
+def _hf_api_call_with_retry(func, *args, max_retries: int = 4, base_wait: float = 15.0, **kwargs):
+    """对 HuggingFace API 调用增加 429 重试逻辑（指数退避）"""
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if '429' in str(e) or 'Too Many Requests' in str(e):
+                if attempt < max_retries - 1:
+                    wait = base_wait * (2 ** attempt)
+                    print(f"    ⏳ 触发 HF API 限速 (429)，等待 {wait:.0f}s 后重试 ({attempt + 1}/{max_retries - 1})...")
+                    time.sleep(wait)
+                else:
+                    raise
+            else:
+                raise
+    return func(*args, **kwargs)
+
+
 def get_model_tree_children(base_model_id: str, max_depth: int = 1) -> List[Dict]:
     """
     获取指定模型的直接衍生模型（通过 HuggingFace API 的 base_model filter）
@@ -233,7 +251,7 @@ def get_model_tree_children(base_model_id: str, max_depth: int = 1) -> List[Dict
     try:
         # 验证基础模型存在
         try:
-            base_info = model_info(base_model_id, token=HF_TOKEN)
+            base_info = _hf_api_call_with_retry(model_info, base_model_id, token=HF_TOKEN)
             print(f"📊 获取 {base_model_id} 的model tree...")
         except Exception as e:
             print(f"⚠️ 基础模型 {base_model_id} 不存在或无法访问: {e}")
@@ -242,7 +260,8 @@ def get_model_tree_children(base_model_id: str, max_depth: int = 1) -> List[Dict
         # 使用 HuggingFace 官方的 base_model filter 功能
         # 这是正确的 Model Tree 查找方法
         try:
-            derivatives = list(list_models(
+            derivatives = list(_hf_api_call_with_retry(
+                list_models,
                 filter=f"base_model:{base_model_id}",
                 full=True,
                 limit=1000,  # 增加限制以获取所有衍生模型
@@ -259,11 +278,14 @@ def get_model_tree_children(base_model_id: str, max_depth: int = 1) -> List[Dict
             related_models = []
             for deriv in derivatives:
                 try:
+                    # 每次处理衍生模型前稍作等待，降低突发请求速率
+                    time.sleep(0.3)
+
                     # 第一次调用：不带expand，获取created_at等基础字段
-                    deriv_basic = model_info(deriv.id, token=HF_TOKEN)
+                    deriv_basic = _hf_api_call_with_retry(model_info, deriv.id, token=HF_TOKEN)
 
                     # 第二次调用：带expand，获取downloadsAllTime
-                    deriv_info = model_info(deriv.id, expand=["downloadsAllTime"], token=HF_TOKEN)
+                    deriv_info = _hf_api_call_with_retry(model_info, deriv.id, expand=["downloadsAllTime"], token=HF_TOKEN)
 
                     # 将created_at从basic对象复制到expand对象
                     if hasattr(deriv_basic, 'created_at') and not getattr(deriv_info, 'created_at', None):
