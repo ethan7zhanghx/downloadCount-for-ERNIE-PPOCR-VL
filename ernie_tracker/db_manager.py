@@ -347,14 +347,47 @@ def export_database_to_excel(output_path, date_filter=None):
             """
             df = pd.read_sql(query, conn)
 
+        if df.empty:
+            conn.close()
+            return False, "没有数据可导出"
+
+        # 为导出结果补充“首次被抓取时间”
+        # 口径：按 (repo, publisher, model_name) 大小写无关匹配，
+        # 优先使用 fetched_at；若为空则回退到 date 00:00:00
+        first_fetch_query = f"""
+            SELECT
+                repo,
+                LOWER(TRIM(publisher)) AS publisher_key,
+                LOWER(TRIM(model_name)) AS model_name_key,
+                MIN(
+                    CASE
+                        WHEN fetched_at IS NOT NULL AND TRIM(fetched_at) != '' AND LOWER(TRIM(fetched_at)) NOT IN ('none', 'nan')
+                        THEN fetched_at
+                        ELSE date || ' 00:00:00'
+                    END
+                ) AS first_fetched_at
+            FROM {DATA_TABLE}
+            GROUP BY repo, LOWER(TRIM(publisher)), LOWER(TRIM(model_name))
+        """
+        first_fetch_df = pd.read_sql(first_fetch_query, conn)
         conn.close()
 
-        if df.empty:
-            return False, "没有数据可导出"
+        df['_publisher_key'] = df['publisher'].astype(str).str.strip().str.lower()
+        df['_model_name_key'] = df['model_name'].astype(str).str.strip().str.lower()
+        df = df.merge(
+            first_fetch_df,
+            left_on=['repo', '_publisher_key', '_model_name_key'],
+            right_on=['repo', 'publisher_key', 'model_name_key'],
+            how='left'
+        )
+        df = df.drop(columns=['_publisher_key', '_model_name_key', 'publisher_key', 'model_name_key'], errors='ignore')
 
         # 重新排列列顺序，把重要的model tree信息放在前面
         # 确保这些列存在
         base_columns = ['date', 'repo', 'model_name', 'publisher', 'download_count']
+
+        if 'first_fetched_at' in df.columns:
+            base_columns.append('first_fetched_at')
 
         # Model Tree 相关列
         model_tree_columns = []

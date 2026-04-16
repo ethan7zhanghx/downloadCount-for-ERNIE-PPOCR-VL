@@ -56,13 +56,13 @@ def save_to_db(df, db_path="ernie_downloads.db"):
 from huggingface_hub import list_models, model_info
 
 def fetch_hugging_face_data(search_query="ERNIE-4.5", progress_callback=None, progress_total=None):
-    models = list(list_models(search=search_query, full=True))
+    models = list(list_models(search=search_query, full=True, token=False))
     total_count = len(models)
     results = []
 
     for i, m in enumerate(models, start=1):
         try:
-            info = model_info(m.id, expand=["downloadsAllTime"])
+            info = model_info(m.id, expand=["downloadsAllTime"], token=False)
             results.append({
                 "date": date.today().isoformat(),
                 "repo": "Hugging Face",

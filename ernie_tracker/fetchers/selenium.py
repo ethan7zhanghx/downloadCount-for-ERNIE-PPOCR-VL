@@ -492,8 +492,8 @@ class AIStudioFetcher(BaseFetcher):
                 except Exception as e:
                     print(f"[AI Studio] ⚠️  无法加载已存在模型列表: {e}")
 
-                # 使用ERNIE-4.5和PaddleOCR-VL作为搜索词
-                search_terms = ["ERNIE-4.5", "PaddleOCR-VL"]
+                # 使用ERNIE-4.5、PaddleOCR-VL和ERNIE-Image作为搜索词
+                search_terms = ["ERNIE-4.5", "PaddleOCR-VL", "ERNIE-Image"]
 
                 for search_term in search_terms:
                     print(f"[AI Studio] 搜索 {search_term} 相关模型...")
@@ -682,24 +682,21 @@ class AIStudioFetcher(BaseFetcher):
                                 if publisher.startswith("PaddlePaddle/PaddlePaddle/"):
                                     publisher = publisher.replace("PaddlePaddle/PaddlePaddle/", "PaddlePaddle/")
 
-                                # 确保只包含ERNIE-4.5和PaddleOCR-VL相关模型
-                                if ("ERNIE-4.5" in model_name or "PaddleOCR-VL" in model_name or
-                                    "ernie-4.5" in model_name or "paddleocr-vl" in model_name):
+                                # 搜索页已按关键词筛选，直接保留卡片，避免因名称大小写或别名导致漏抓。
+                                self.results.append(self.create_record(
+                                    model_name=model_name,
+                                    publisher=publisher,
+                                    download_count=final_usage_count,
+                                    search_keyword=search_term,
+                                    last_modified=last_modified,
+                                    url=model_url  # 新增：模型详情页URL
+                                ))
 
-                                    self.results.append(self.create_record(
-                                        model_name=model_name,
-                                        publisher=publisher,
-                                        download_count=final_usage_count,
-                                        search_keyword=search_term,
-                                        last_modified=last_modified,
-                                        url=model_url  # 新增：模型详情页URL
-                                    ))
-
-                                    # 记录已处理
-                                    processed_models.add(full_model_name)
-                                    processed_count += 1
-                                    if progress_callback:
-                                        progress_callback(processed_count)
+                                # 记录已处理
+                                processed_models.add(full_model_name)
+                                processed_count += 1
+                                if progress_callback:
+                                    progress_callback(processed_count)
 
                             except Exception as e:
                                 print(f"[AI Studio] ❌ 处理卡片 {i} 时出错: {e}")
@@ -781,7 +778,7 @@ class GiteeFetcher(BaseFetcher):
         """抓取 Gitee AI 数据"""
         driver = create_chrome_driver()
         total_count = 0
-        search_terms = ["ERNIE-4.5", "PaddleOCR-VL"]
+        search_terms = ["ERNIE-4.5", "PaddleOCR-VL", "ERNIE-Image"]
         seen = set()
 
         try:
@@ -858,7 +855,7 @@ class ModelersFetcher(BaseFetcher):
         driver = create_chrome_driver()
         wait = WebDriverWait(driver, 20)
         total_models = 0
-        search_terms = ["ERNIE-4.5", "PaddleOCR-VL"]
+        search_terms = ["ERNIE-4.5", "PaddleOCR-VL", "ERNIE-Image"]
         seen = set()
 
         try:

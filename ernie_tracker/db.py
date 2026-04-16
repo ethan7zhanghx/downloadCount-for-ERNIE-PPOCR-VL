@@ -559,6 +559,9 @@ def load_data_from_db(date_filter=None, platform_filter=None, last_value_per_mod
         DataFrame: 查询结果（已去重）
     """
     try:
+        def _is_missing_text(value):
+            return str(value).strip().lower() in ("", "none", "nan")
+
         conn = sqlite3.connect(DB_PATH)
 
         # 优先顺序：
@@ -637,6 +640,79 @@ def load_data_from_db(date_filter=None, platform_filter=None, last_value_per_mod
         df = pd.read_sql_query(query, conn, params=params)
         conn.close()
 
+        # 在“最后有效值”模式下，若最新记录的 model_category 为空，则回填历史最近非空分类
+        # 目的：避免“最新快照分类缺失”导致后续系列筛选误丢模型。
+        if (
+            last_value_per_model
+            and date_filter
+            and not df.empty
+            and 'model_category' in df.columns
+            and {'repo', 'publisher', 'model_name'}.issubset(df.columns)
+        ):
+            missing_mask = df['model_category'].apply(_is_missing_text)
+            if missing_mask.any():
+                missing_keys_df = df.loc[missing_mask, ['repo', 'publisher', 'model_name']].copy()
+                missing_keys_df['publisher_key'] = missing_keys_df['publisher'].astype(str).str.strip().str.lower()
+                missing_keys_df['model_name_key'] = missing_keys_df['model_name'].astype(str).str.strip().str.lower()
+                missing_keys_df = missing_keys_df.drop_duplicates(
+                    subset=['repo', 'publisher_key', 'model_name_key']
+                )
+
+                key_tuples = list(
+                    missing_keys_df[['repo', 'publisher_key', 'model_name_key']]
+                    .itertuples(index=False, name=None)
+                )
+                if key_tuples:
+                    values_clause = ", ".join(["(?, ?, ?)"] * len(key_tuples))
+                    key_params = [item for row in key_tuples for item in row]
+                    category_query = f"""
+                        WITH missing_keys(repo, publisher_key, model_name_key) AS (
+                            VALUES {values_clause}
+                        ),
+                        ranked_category AS (
+                            SELECT
+                                md.repo,
+                                LOWER(md.publisher) AS publisher_key,
+                                LOWER(md.model_name) AS model_name_key,
+                                md.model_category,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY md.repo, LOWER(md.publisher), LOWER(md.model_name)
+                                    ORDER BY DATE(md.date) DESC, md.rowid DESC
+                                ) AS rn_cat
+                            FROM {DATA_TABLE} md
+                            INNER JOIN missing_keys mk
+                                ON md.repo = mk.repo
+                               AND LOWER(md.publisher) = mk.publisher_key
+                               AND LOWER(md.model_name) = mk.model_name_key
+                            WHERE DATE(md.date) <= ?
+                              AND md.model_category IS NOT NULL
+                              AND LOWER(TRIM(md.model_category)) NOT IN ('', 'none', 'nan')
+                        )
+                        SELECT repo, publisher_key, model_name_key, model_category
+                        FROM ranked_category
+                        WHERE rn_cat = 1
+                    """
+                    category_params = key_params + [date_filter]
+                    with sqlite3.connect(DB_PATH) as category_conn:
+                        category_df = pd.read_sql_query(category_query, category_conn, params=category_params)
+
+                    if not category_df.empty:
+                        category_map = {
+                            (row['repo'], row['publisher_key'], row['model_name_key']): row['model_category']
+                            for _, row in category_df.iterrows()
+                        }
+                        fill_keys = df.loc[missing_mask, ['repo', 'publisher', 'model_name']].copy()
+                        fill_keys['_fill_key'] = list(zip(
+                            fill_keys['repo'],
+                            fill_keys['publisher'].astype(str).str.strip().str.lower(),
+                            fill_keys['model_name'].astype(str).str.strip().str.lower()
+                        ))
+                        filled_values = fill_keys['_fill_key'].map(category_map)
+                        df.loc[missing_mask, 'model_category'] = filled_values.where(
+                            filled_values.notna(),
+                            df.loc[missing_mask, 'model_category']
+                        )
+
         # 在“最后有效值”模式下，使用指定的 date_filter 作为快照日期，避免后续按 date 精确筛选时丢失记录
         if last_value_per_model and date_filter and not df.empty:
             df['date'] = date_filter
@@ -650,7 +726,7 @@ def load_data_from_db(date_filter=None, platform_filter=None, last_value_per_mod
             )
         if not df.empty and 'base_model' in df.columns:
             df['base_model'] = df['base_model'].apply(
-                lambda v: None if str(v).strip().lower() in ['', 'none', 'nan'] else v
+                lambda v: None if _is_missing_text(v) else v
             )
 
         # 动态补全历史数据中的 Hugging Face 缺失 URL

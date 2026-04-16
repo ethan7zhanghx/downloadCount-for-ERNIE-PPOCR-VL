@@ -886,6 +886,7 @@ page = st.sidebar.radio(
         "📥 数据更新",
         "📊 ERNIE-4.5 分析",
         "📊 PaddleOCR-VL 分析",
+        "📊 ERNIE-Image 分析",
         "📈 整体对标统计",
         "🌳 衍生模型生态",
         "🗄️ 数据库管理",
@@ -1833,6 +1834,199 @@ elif page == "📊 PaddleOCR-VL 分析":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
+# ================= ERNIE-Image 数据分析模块 =================
+elif page == "📊 ERNIE-Image 分析":
+    from ernie_tracker.analysis import calculate_weekly_report, format_report_tables, get_available_dates, get_last_friday
+    from datetime import datetime
+
+    st.markdown("## 📈 ERNIE-Image 周报分析")
+    st.markdown("分析当前日期与对比日期之间的下载量增长情况")
+
+    available_dates = get_available_dates()
+
+    if not available_dates:
+        st.warning("⚠️ 数据库中暂无数据，请先在「数据更新」页面抓取数据。")
+    else:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            current_date = st.selectbox(
+                "📅 当前日期",
+                options=available_dates,
+                index=0,
+                help="选择要分析的当前日期",
+                key="ernie_image_current_date"
+            )
+
+        with col2:
+            default_previous = get_last_friday(current_date)
+            if default_previous in available_dates:
+                default_index = available_dates.index(default_previous)
+            else:
+                default_index = min(1, len(available_dates) - 1)
+
+            previous_date = st.selectbox(
+                "📅 对比日期",
+                options=available_dates,
+                index=default_index,
+                help="选择要对比的日期（通常为上周五）",
+                key="ernie_image_previous_date"
+            )
+
+        if st.button("🔍 生成周报", type="primary", key="ernie_image_gen"):
+            with st.spinner("正在分析数据..."):
+                report_data = calculate_weekly_report(current_date, previous_date, model_series='ERNIE-Image')
+
+            if report_data is None:
+                st.error("❌ 无法生成周报，请检查选择的日期是否有数据。")
+            else:
+                st.session_state['report_data_ernie_image'] = report_data
+                st.session_state['ernie_image_current_date'] = current_date
+                st.session_state['ernie_image_previous_date'] = previous_date
+                st.rerun()
+
+        report_data = st.session_state.get('report_data_ernie_image')
+
+        if report_data is not None:
+            tables = format_report_tables(report_data)
+
+            saved_current_date = st.session_state.get('ernie_image_current_date', current_date)
+            saved_previous_date = st.session_state.get('ernie_image_previous_date', previous_date)
+
+            st.success(f"✅ 周报生成成功！对比时间段：{saved_previous_date} → {saved_current_date}")
+
+            warnings_df = tables.get('negative_growth_warnings')
+            if warnings_df is not None and not warnings_df.empty:
+                st.markdown("### ⚠️ 负增长警告")
+                st.error(f"检测到 {len(warnings_df)} 个模型出现负增长！")
+                st.dataframe(warnings_df, use_container_width=True)
+                st.markdown("---")
+
+            st.markdown("### 📝 总体情况摘要")
+            stats = report_data['summary_stats']
+
+            def format_num(n):
+                return f"{n/10000:.2f}万"
+
+            def format_percent(p):
+                return f"{p:.2%}"
+
+            official_total_percent = stats['official_current_total'] / stats['all_current_total'] if stats['all_current_total'] else 0
+            derivative_total_percent = stats['derivative_current_total'] / stats['all_current_total'] if stats['all_current_total'] else 0
+            official_growth_percent = stats['official_growth'] / stats['all_growth'] if stats['all_growth'] else 0
+            derivative_growth_percent = stats['derivative_growth'] / stats['all_growth'] if stats['all_growth'] else 0
+
+            summary_text = f"""
+            截至 **{saved_current_date}**，模型累计下载 **{format_num(stats['all_current_total'])}** 次
+            （含官方模型 **{format_num(stats['official_current_total'])}** 次，占比 **{format_percent(official_total_percent)}**，
+            衍生 **{format_num(stats['derivative_current_total'])}** 次，占比 **{format_percent(derivative_total_percent)}**），
+            较上周增长 **{format_num(stats['all_growth'])}** 次
+            （官方模型 **{format_num(stats['official_growth'])}** 次，占比 **{format_percent(official_growth_percent)}**，
+            衍生模型增长 **{format_num(stats['derivative_growth'])}** 次，占比 **{format_percent(derivative_growth_percent)}**）。
+            """
+            st.markdown(summary_text)
+
+            new_models_list_count = len(tables.get('all_new_models', pd.DataFrame()))
+            st.info(
+                f"累计衍生模型：{int(stats.get('derivative_current_total_models', 0) or 0)} 个｜"
+                f"本周新增衍生（HF非官方差集）：{int(stats.get('derivative_new_models', 0) or 0)} 个｜"
+                f"新增列表展示：{new_models_list_count} 个"
+            )
+
+            st.markdown("### 📊 平台汇总")
+            st.dataframe(tables['platform_summary'], use_container_width=True)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("### 🏆 Top 5 增长最高的模型")
+                st.dataframe(tables['top5_growth'], use_container_width=True)
+            with col2:
+                st.markdown("### 🥇 Top 3 总下载量最高的模型")
+                st.dataframe(tables['top3_downloads'], use_container_width=True)
+
+            st.markdown("### 📋 各平台模型下载量详情 (总/周增)")
+            st.dataframe(tables['combined_downloads_growth'], use_container_width=True)
+
+            st.markdown("### 🌟 本周新增衍生模型")
+            summary = tables.get('new_models_summary', '无新增模型信息')
+            st.info(f"📊 {summary}")
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.markdown("#### 🔧 新增Finetune模型")
+                finetune_df = tables.get('new_finetune_models')
+                if finetune_df is not None and not finetune_df.empty:
+                    st.dataframe(finetune_df, use_container_width=True)
+                else:
+                    st.info("本周无新增Finetune模型")
+            with col2:
+                st.markdown("#### 🔌 新增Adapter模型")
+                adapter_df = tables.get('new_adapter_models')
+                if adapter_df is not None and not adapter_df.empty:
+                    st.dataframe(adapter_df, use_container_width=True)
+                else:
+                    st.info("本周无新增Adapter模型")
+            with col3:
+                st.markdown("#### 🎯 新增LoRA模型")
+                lora_df = tables.get('new_lora_models')
+                if lora_df is not None and not lora_df.empty:
+                    st.dataframe(lora_df, use_container_width=True)
+                else:
+                    st.info("本周无新增LoRA模型")
+
+            st.markdown("### 📋 本周新增模型完整列表")
+            all_new_summary = tables.get('all_new_models_summary', '无新增模型')
+            st.info(f"📊 {all_new_summary}")
+            all_new_df = tables.get('all_new_models')
+            if all_new_df is not None and not all_new_df.empty:
+                st.dataframe(all_new_df, use_container_width=True, height=400)
+            else:
+                st.info("本周没有新增ERNIE-Image模型")
+
+            st.markdown("### 🗑️ 已删除/隐藏的衍生模型")
+            st.info("📌 这些模型在历史记录中存在，但在当前日期已不可见")
+
+            from ernie_tracker.analysis import get_deleted_or_hidden_models
+            deleted_models = get_deleted_or_hidden_models(current_date, model_series='ERNIE-Image')
+
+            if deleted_models:
+                deleted_df = pd.DataFrame(deleted_models)
+                deleted_df.index = deleted_df.index + 1
+                column_mapping = {
+                    'model_name': '模型名称', 'publisher': '发布者', 'repo': '平台',
+                    'model_type': '模型类型', 'base_model': '基础模型',
+                    'last_seen_date': '最后出现日期', 'last_download_count': '最后下载量'
+                }
+                deleted_df = deleted_df.rename(columns={k: v for k, v in column_mapping.items() if k in deleted_df.columns})
+                st.warning(f"⚠️ 发现 {len(deleted_models)} 个模型已被删除或隐藏")
+                st.dataframe(deleted_df, use_container_width=True, height=400)
+            else:
+                st.success("✅ 所有历史模型在当前日期仍然可见")
+
+            st.markdown("### 💾 导出报表")
+            from io import BytesIO
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                tables['platform_summary'].to_excel(writer, sheet_name='平台汇总')
+                tables['top5_growth'].to_excel(writer, sheet_name='Top5增长')
+                tables['top3_downloads'].to_excel(writer, sheet_name='Top3下载量')
+                tables['combined_downloads_growth'].to_excel(writer, sheet_name='下载量详情')
+                if not tables.get('new_finetune_models', pd.DataFrame()).empty:
+                    tables['new_finetune_models'].to_excel(writer, sheet_name='新增Finetune模型')
+                if not tables.get('new_adapter_models', pd.DataFrame()).empty:
+                    tables['new_adapter_models'].to_excel(writer, sheet_name='新增Adapter模型')
+                if not tables.get('new_lora_models', pd.DataFrame()).empty:
+                    tables['new_lora_models'].to_excel(writer, sheet_name='新增LoRA模型')
+                if not tables.get('all_new_models', pd.DataFrame()).empty:
+                    tables['all_new_models'].to_excel(writer, sheet_name='所有新增模型')
+            excel_data = output.getvalue()
+            st.download_button(
+                label="📥 下载完整周报 (Excel)",
+                data=excel_data,
+                file_name=f"ERNIE-Image_周报_{saved_previous_date}_to_{saved_current_date}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
 # ================= 数据库管理模块 =================
 elif page == "🗄️ 数据库管理":
     from ernie_tracker.db_manager import (
@@ -2258,7 +2452,7 @@ elif page == "🗄️ 数据库管理":
             with col5:
                 input_model_category = st.selectbox(
                     "模型分类",
-                    options=["", "ernie-4.5", "paddleocr-vl", "other"],
+                    options=["", "ernie-4.5", "paddleocr-vl", "ernie-image", "other"],
                     help="模型的系列分类"
                 )
             
@@ -2653,7 +2847,7 @@ elif page == "🗄️ 数据库管理":
                             )
 
                         with col_form5:
-                            category_options = ["", "ernie-4.5", "paddleocr-vl", "other"]
+                            category_options = ["", "ernie-4.5", "paddleocr-vl", "ernie-image", "other"]
                             current_category = record['model_category'] or ""
                             edit_model_category = st.selectbox(
                                 "模型分类",
@@ -2816,7 +3010,7 @@ elif page == "🗄️ 数据库管理":
             with col4:
                 aistudio_category = st.selectbox(
                     "模型分类 *",
-                    options=["ernie-4.5", "paddleocr-vl", "other"],
+                    options=["ernie-4.5", "paddleocr-vl", "ernie-image", "other"],
                     index=0,
                     help="选择模型所属的类别，影响「衍生模型生态」统计",
                     key="aistudio_category"
@@ -2864,7 +3058,7 @@ elif page == "🗄️ 数据库管理":
             with col_cat:
                 whitelist_category = st.selectbox(
                     "模型分类",
-                    options=["自动推断", "ernie-4.5", "paddleocr-vl", "other"],
+                    options=["自动推断", "ernie-4.5", "paddleocr-vl", "ernie-image", "other"],
                     index=0,
                     help="选择模型分类，影响「衍生模型生态」统计",
                     key="whitelist_category"
@@ -3109,6 +3303,7 @@ elif page == "🌳 衍生模型生态":
     from ernie_tracker.analysis import (
         get_available_dates,
         analyze_derivative_models_all_platforms,
+        calculate_recent_derivative_velocity_top,
         calculate_periodic_stats,
         get_deleted_derivative_models_all_platforms,
         get_models_needing_backfill
@@ -3459,9 +3654,76 @@ elif page == "🌳 衍生模型生态":
                                     else:
                                         st.info("暂无数据")
 
+                        st.markdown("---")
+
+                    # 预加载原始历史数据，供“近两个月发布模型下载效率榜”和“详细列表首见日期”共用
+                    from ernie_tracker.db import load_data_from_db
+                    raw_df = load_data_from_db(last_value_per_model=False)
+
+                    # ========== 7. 近两个月发布模型的平均日下载 Top 10 ==========
+                    st.markdown("### 🚀 近两个月发布模型：平均日下载 Top 10")
+                    st.caption(f"口径说明：仅统计相对 {selected_date} 往前两个月内发布的衍生模型；发布时间优先取 created_at，缺失时回退到首次入库日期；平均单位时长按“平均日下载量”计算。")
+
+                    recent_velocity_full_df = calculate_recent_derivative_velocity_top(
+                        analysis_result['derivative_models_df'],
+                        raw_df,
+                        selected_date=selected_date,
+                        months=2,
+                        top_n=None
+                    )
+
+                    if recent_velocity_full_df.empty:
+                        st.info("近两个月内发布且可识别发布时间的衍生模型不足，暂时无法生成榜单。")
+                    else:
+                        recent_velocity_top10_df = recent_velocity_full_df.head(10).copy()
+                        recent_velocity_display_df = recent_velocity_top10_df.rename(columns={
+                            'model_name': '模型名称',
+                            'publisher': '发布者',
+                            'repo': '平台',
+                            'model_category': '模型系列',
+                            'model_type': '模型类型',
+                            'download_count': '当前下载量',
+                            'publish_date': '发布时间',
+                            'publish_date_source': '发布时间来源',
+                            'days_since_publish': '已上线天数',
+                            'avg_downloads_per_day': '平均日下载量',
+                            'url': '模型URL'
+                        }).reset_index(drop=True)
+                        recent_velocity_display_df.index = recent_velocity_display_df.index + 1
+                        st.dataframe(recent_velocity_display_df, use_container_width=True, height=420)
+
+                        with st.expander(f"📋 查看/导出完整榜单（共 {len(recent_velocity_full_df)} 个模型）", expanded=False):
+                            recent_velocity_full_display_df = recent_velocity_full_df.rename(columns={
+                                'model_name': '模型名称',
+                                'publisher': '发布者',
+                                'repo': '平台',
+                                'model_category': '模型系列',
+                                'model_type': '模型类型',
+                                'download_count': '当前下载量',
+                                'publish_date': '发布时间',
+                                'publish_date_source': '发布时间来源',
+                                'days_since_publish': '已上线天数',
+                                'avg_downloads_per_day': '平均日下载量',
+                                'url': '模型URL'
+                            }).reset_index(drop=True)
+                            recent_velocity_full_display_df.index = recent_velocity_full_display_df.index + 1
+                            st.dataframe(recent_velocity_full_display_df, use_container_width=True, height=500)
+
+                            recent_velocity_output = BytesIO()
+                            with pd.ExcelWriter(recent_velocity_output, engine='openpyxl') as writer:
+                                recent_velocity_full_df.to_excel(writer, sheet_name='完整榜单', index=False)
+                            st.download_button(
+                                label="📥 下载完整榜单 (Excel)",
+                                data=recent_velocity_output.getvalue(),
+                                file_name=f"近两个月发布模型_平均日下载完整榜单_{selected_date}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True,
+                                key=f"download_recent_velocity_full_{selected_date}"
+                            )
+
                     st.markdown("---")
 
-                    # ========== 7. 按系列统计 ==========
+                    # ========== 8. 按系列统计 ==========
                     if analysis_result['by_series']:
                         st.markdown("### 📈 按模型系列统计")
 
@@ -3480,7 +3742,7 @@ elif page == "🌳 衍生模型生态":
 
                         st.markdown("---")
 
-                    # ========== 8. 衍生模型详细列表 ==========
+                    # ========== 9. 衍生模型详细列表 ==========
                     st.markdown("### 📋 衍生模型详细列表")
 
                     derivative_models_df = analysis_result['derivative_models_df']
@@ -3518,11 +3780,7 @@ elif page == "🌳 衍生模型生态":
                         st.info(f"📊 共 {len(filtered_derivatives)} 个衍生模型符合筛选条件")
 
                         # 从数据库获取每个模型的首次入库日期（一次性查询所有模型）
-                        from ernie_tracker.db import load_data_from_db
                         from ernie_tracker.analysis import normalize_model_names
-
-                        # 加载原始数据（不使用 last_value_per_model，获取所有历史记录）
-                        raw_df = load_data_from_db(last_value_per_model=False)
 
                         if not raw_df.empty and not filtered_derivatives.empty:
                             # 对 raw_df 做和 analyze_derivative_models_all_platforms 一样的标准化处理
@@ -3598,7 +3856,12 @@ elif page == "🌳 衍生模型生态":
                                 if analysis_result['by_series']:
                                     series_df.to_excel(writer, sheet_name='系列统计', index=False)
 
-                                # Sheet 4: 衍生模型列表（导出当前筛选结果，包含所有字段）
+                                # Sheet 4: 近两个月发布模型-平均日下载Top10
+                                if not recent_velocity_full_df.empty:
+                                    recent_velocity_full_df.head(10).to_excel(writer, sheet_name='近两个月发布Top10', index=False)
+                                    recent_velocity_full_df.to_excel(writer, sheet_name='近两个月发布完整榜单', index=False)
+
+                                # Sheet 5: 衍生模型列表（导出当前筛选结果，包含所有字段）
                                 export_df = display_df.copy()
                                 # 移除临时排序列
                                 if 'download_count_num' in export_df.columns:

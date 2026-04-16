@@ -22,7 +22,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from tqdm.notebook import tqdm
 
-from ..config import SEARCH_QUERY, DB_PATH
+from ..config import SEARCH_QUERY, DB_PATH, HF_TOKEN
 from .fetchers_modeltree import classify_model  # 🔧 新增：用于模型分类
 
 
@@ -81,21 +81,21 @@ def fetch_hugging_face_data_unified(progress_callback=None, progress_total=None,
         # 传统模式：只搜索ERNIE-4.5和PaddleOCR-VL，不查找model tree
         print("🔍 搜索ERNIE-4.5和PaddleOCR-VL模型...")
         try:
-            search_terms = ['ERNIE-4.5', 'PaddleOCR-VL']
+            search_terms = ['ERNIE-4.5', 'PaddleOCR-VL', 'ERNIE-Image']
             search_results = []
 
             for search_term in search_terms:
                 try:
-                    term_models = list(list_models(search=search_term, full=True, limit=500))
+                    term_models = list(list_models(search=search_term, full=True, limit=500, token=HF_TOKEN))
                     print(f"  🔍 搜索 '{search_term}' 找到 {len(term_models)} 个模型")
 
                     for i, m in enumerate(term_models):
                         try:
                             # 第一次调用：不带expand，获取created_at等基础字段
-                            info_basic = model_info(m.id)
+                            info_basic = model_info(m.id, token=HF_TOKEN)
 
                             # 第二次调用：带expand，获取downloadsAllTime
-                            info = model_info(m.id, expand=["downloadsAllTime"])
+                            info = model_info(m.id, expand=["downloadsAllTime"], token=HF_TOKEN)
 
                             # 将created_at从basic对象复制到expand对象
                             if hasattr(info_basic, 'created_at') and not getattr(info, 'created_at', None):
@@ -193,7 +193,7 @@ def get_modelscope_ids_unified():
     model_id_to_keyword = {}  # 记录每个模型ID对应的搜索关键词
 
     # 搜索 ERNIE-4.5 和 PaddleOCR-VL
-    search_terms = ["ERNIE-4.5", "PaddleOCR-VL"]
+    search_terms = ["ERNIE-4.5", "PaddleOCR-VL", "ERNIE-Image"]
 
     for search_term in search_terms:
         print(f"[ModelScope] 搜索 {search_term}...")
@@ -366,7 +366,9 @@ def fetch_gitcode_data_unified(progress_callback=None, progress_total=None):
         "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-VL-28B-A3B-Base-Paddle",
         "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-VL-28B-A3B-Paddle",
         "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-300B-A47B-Base-PT",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-300B-A47B-W4A8C8-TP4-Paddle"
+        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-300B-A47B-W4A8C8-TP4-Paddle",
+        "https://ai.gitcode.com/paddlepaddle/ERNIE-Image",
+        "https://ai.gitcode.com/paddlepaddle/ERNIE-Image-Turbo"
     ]
 
     # PaddleOCR-VL 模型
@@ -452,6 +454,7 @@ def fetch_gitcode_data_unified(progress_callback=None, progress_total=None):
                 "model_name": model_name,
                 "publisher": "飞桨PaddlePaddle",
                 "download_count": downloads,
+                "model_category": classify_model(model_name, "飞桨PaddlePaddle", None),
                 "url": model_link,  # 模型详情页URL（从链接列表获取）
                 "last_modified": None,  # 🔧 新增：GitCode不提供更新时间字段
                 "created_at": None  # 🔧 新增：GitCode不提供创建时间字段
@@ -511,6 +514,7 @@ def fetch_caict_data_unified(progress_callback=None, progress_total=None):
                 "model_name": model_name,
                 "publisher": "PaddlePaddle", # 🔧 修复：确保 publisher 始终为 "PaddlePaddle" (统一大小写)
                 "download_count": downloads,
+                "model_category": classify_model(model_name, "PaddlePaddle", None),
                 "url": model_link  # 模型详情页URL（从链接列表获取）
             })
 

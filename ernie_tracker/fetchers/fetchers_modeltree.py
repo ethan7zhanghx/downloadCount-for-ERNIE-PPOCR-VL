@@ -9,7 +9,7 @@ import time
 import re
 from typing import List, Dict, Set, Tuple
 from ..db import save_to_db, get_last_model_count, update_last_model_count
-from ..config import DB_PATH
+from ..config import DB_PATH, HF_TOKEN
 
 
 def classify_model(model_name: str, publisher: str, base_model: str = None) -> str:
@@ -34,11 +34,21 @@ def classify_model(model_name: str, publisher: str, base_model: str = None) -> s
         compact = re.sub(r'[^a-z0-9]+', '', n)
         return ('paddleocr' in n and 'vl' in n) or ('paddleocr' in compact and 'vl' in compact)
 
+    def _is_ernie_image(name: str) -> bool:
+        if not name:
+            return False
+        n = str(name).lower()
+        compact = re.sub(r'[^a-z0-9]+', '', n)
+        return 'ernie-image' in n or 'ernieimage' in compact
+
     base_lower = base_model.lower() if base_model else ''
     name_lower = model_name.lower()
 
     if _is_paddleocr(base_lower) or _is_paddleocr(name_lower):
         return 'paddleocr-vl'
+
+    if _is_ernie_image(base_lower) or _is_ernie_image(name_lower):
+        return 'ernie-image'
 
     # 默认归入 ernie-4.5
     return 'ernie-4.5'
@@ -223,7 +233,7 @@ def get_model_tree_children(base_model_id: str, max_depth: int = 1) -> List[Dict
     try:
         # 验证基础模型存在
         try:
-            base_info = model_info(base_model_id)
+            base_info = model_info(base_model_id, token=HF_TOKEN)
             print(f"📊 获取 {base_model_id} 的model tree...")
         except Exception as e:
             print(f"⚠️ 基础模型 {base_model_id} 不存在或无法访问: {e}")
@@ -235,7 +245,8 @@ def get_model_tree_children(base_model_id: str, max_depth: int = 1) -> List[Dict
             derivatives = list(list_models(
                 filter=f"base_model:{base_model_id}",
                 full=True,
-                limit=1000  # 增加限制以获取所有衍生模型
+                limit=1000,  # 增加限制以获取所有衍生模型
+                token=HF_TOKEN
             ))
 
             if not derivatives:
@@ -249,10 +260,10 @@ def get_model_tree_children(base_model_id: str, max_depth: int = 1) -> List[Dict
             for deriv in derivatives:
                 try:
                     # 第一次调用：不带expand，获取created_at等基础字段
-                    deriv_basic = model_info(deriv.id)
+                    deriv_basic = model_info(deriv.id, token=HF_TOKEN)
 
                     # 第二次调用：带expand，获取downloadsAllTime
-                    deriv_info = model_info(deriv.id, expand=["downloadsAllTime"])
+                    deriv_info = model_info(deriv.id, expand=["downloadsAllTime"], token=HF_TOKEN)
 
                     # 将created_at从basic对象复制到expand对象
                     if hasattr(deriv_basic, 'created_at') and not getattr(deriv_info, 'created_at', None):
@@ -340,7 +351,7 @@ def extract_related_models_from_card(card_data: dict, base_model_id: str) -> Lis
             if match != base_model_id and match not in related_models:
                 # 验证是否是有效的模型
                 try:
-                    model_info(match)  # 验证模型存在
+                    model_info(match, token=HF_TOKEN)  # 验证模型存在
                     related_models.append(match)
                 except:
                     continue
@@ -461,7 +472,7 @@ def get_all_ernie_derivatives(include_paddleocr: bool = True) -> Tuple[pd.DataFr
     processed_ids: Set[str] = set()
     official_models: Dict[str, Dict] = {}
 
-    search_terms = ['ERNIE-4.5', 'PaddleOCR-VL']
+    search_terms = ['ERNIE-4.5', 'PaddleOCR-VL', 'ERNIE-Image']
 
     # ---------- 辅助函数 ----------
     def normalize_tags(tags):
@@ -488,10 +499,10 @@ def get_all_ernie_derivatives(include_paddleocr: bool = True) -> Tuple[pd.DataFr
     def fetch_model_detail(model_id, model_obj=None):
         try:
             # 第一次调用：不带expand，获取created_at等基础字段
-            info_basic = model_info(model_id)
+            info_basic = model_info(model_id, token=HF_TOKEN)
 
             # 第二次调用：带expand，获取downloadsAllTime
-            info = model_info(model_id, expand=["downloadsAllTime"])
+            info = model_info(model_id, expand=["downloadsAllTime"], token=HF_TOKEN)
 
             # 将created_at从basic对象复制到expand对象
             if hasattr(info_basic, 'created_at') and not getattr(info, 'created_at', None):
@@ -573,7 +584,8 @@ def get_all_ernie_derivatives(include_paddleocr: bool = True) -> Tuple[pd.DataFr
                 full=True,
                 limit=600,
                 sort="downloads",
-                direction=-1
+                direction=-1,
+                token=HF_TOKEN
             ))
             filtered = [m for m in results if m.id not in exclude_ids]
             print(f"  🔍 搜索 '{keyword}'：{len(results)} 条，去重后 {len(filtered)} 条")
@@ -582,7 +594,7 @@ def get_all_ernie_derivatives(include_paddleocr: bool = True) -> Tuple[pd.DataFr
             print(f"  ⚠️ 搜索 '{keyword}' 失败: {e}")
             return []
 
-    allowed_categories = {'ernie-4.5', 'paddleocr-vl'}
+    allowed_categories = {'ernie-4.5', 'paddleocr-vl', 'ernie-image'}
 
     def add_record(detail: Dict, data_source: str, base_model: str = None, is_original: bool = False):
         if detail is None:
@@ -651,11 +663,17 @@ def get_all_ernie_derivatives(include_paddleocr: bool = True) -> Tuple[pd.DataFr
     # ---------- 2. 补充官方模型列表 ----------
     print("\n🌳 扩充官方模型列表...")
     try:
-        baidu_official = list(list_models(author="baidu", search="ERNIE-4.5", limit=150))
-        paddle_official = list(list_models(author="PaddlePaddle", search="PaddleOCR-VL", limit=50))
-        print(f"  baidu 账号官方模型 {len(baidu_official)} 个；PaddlePaddle {len(paddle_official)} 个")
-        for m in baidu_official + paddle_official:
-            cat = 'paddleocr-vl' if 'paddleocr-vl' in m.id.lower() else 'ernie-4.5'
+        baidu_official = list(list_models(author="baidu", search="ERNIE-4.5", limit=150, token=HF_TOKEN))
+        baidu_image = list(list_models(author="baidu", search="ERNIE-Image", limit=50, token=HF_TOKEN))
+        paddle_official = list(list_models(author="PaddlePaddle", search="PaddleOCR-VL", limit=50, token=HF_TOKEN))
+        print(f"  baidu 账号官方模型 {len(baidu_official)} 个；ERNIE-Image {len(baidu_image)} 个；PaddlePaddle {len(paddle_official)} 个")
+        for m in baidu_official + baidu_image + paddle_official:
+            if 'paddleocr-vl' in m.id.lower():
+                cat = 'paddleocr-vl'
+            elif 'ernie-image' in m.id.lower():
+                cat = 'ernie-image'
+            else:
+                cat = 'ernie-4.5'
             if not include_paddleocr and cat == 'paddleocr-vl':
                 continue
             if cat not in allowed_categories:
@@ -879,13 +897,8 @@ def get_weekly_new_finetune_adapters(current_date: str, previous_date: str, mode
 
         # 🔧 修复：使用 model_category 字段精确筛选，而不是搜索 model_name
         # 根据 model_series 确定要筛选的 model_category
-        if model_series == 'ERNIE-4.5':
-            target_category = 'ernie-4.5'
-        elif model_series == 'PaddleOCR-VL':
-            target_category = 'paddleocr-vl'
-        else:
-            # 默认为 ERNIE-4.5
-            target_category = 'ernie-4.5'
+        _series_to_cat = {'ERNIE-4.5': 'ernie-4.5', 'PaddleOCR-VL': 'paddleocr-vl', 'ERNIE-Image': 'ernie-image'}
+        target_category = _series_to_cat.get(model_series, 'ernie-4.5')
 
         # 筛选Hugging Face平台的指定系列模型（使用 model_category 字段）
         hf_current = current_data[
@@ -994,13 +1007,8 @@ def get_weekly_new_model_tree_derivatives(current_date: str, previous_date: str,
 
         # 🔧 修复：使用 model_category 字段精确筛选，而不是搜索 model_name
         # 根据 model_series 确定要筛选的 model_category
-        if model_series == 'ERNIE-4.5':
-            target_category = 'ernie-4.5'
-        elif model_series == 'PaddleOCR-VL':
-            target_category = 'paddleocr-vl'
-        else:
-            # 默认为 ERNIE-4.5
-            target_category = 'ernie-4.5'
+        _series_to_cat = {'ERNIE-4.5': 'ernie-4.5', 'PaddleOCR-VL': 'paddleocr-vl', 'ERNIE-Image': 'ernie-image'}
+        target_category = _series_to_cat.get(model_series, 'ernie-4.5')
 
         # 只筛选 Hugging Face 平台的指定系列模型，且 base_model 不为空（Model Tree 衍生模型）
         hf_current = current_data[

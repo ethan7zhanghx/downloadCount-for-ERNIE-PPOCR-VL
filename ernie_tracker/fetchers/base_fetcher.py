@@ -28,18 +28,22 @@ def classify_model_category(model_name, search_keyword=None):
         sk_compact = re.sub(r'[^A-Z0-9]+', '', sk_upper)
         if 'ERNIE-4.5' in sk_upper or sk_upper == 'ERNIE-4.5':
             return 'ernie-4.5'
+        elif 'ERNIE-IMAGE' in sk_upper or 'ERNIEIMAGE' in sk_compact:
+            return 'ernie-image'
         elif 'PADDLEOCR-VL' in sk_upper or 'PADDLEOCRVL' in sk_compact:
             return 'paddleocr-vl'
 
-    # 2. 使用模型名称判断
+    # 2. 使用模型名称判断（ernie-image 必须在 ernie-4.5 之前检查）
     if (
         'paddleocr-vl' in model_name_lower
         or 'paddleocrvl' in model_name_compact
         or ('paddleocr' in model_name_compact and 'vl' in model_name_compact)
     ):
         return 'paddleocr-vl'
+    elif 'ernie-image' in model_name_lower or 'ernieimage' in model_name_compact:
+        return 'ernie-image'
     elif 'ernie' in model_name_lower or '文心' in model_name_lower:
-        return 'ernie-4.5'  # 所有 ERNIE 相关都归入 ernie-4.5
+        return 'ernie-4.5'
     else:
         return 'other'
 

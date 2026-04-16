@@ -52,10 +52,10 @@ python3 scripts/import_excel.py
 python3 scripts/cleanup_db.py
 
 # Check database schema
-sqlite3 ernie_downloads.db ".schema"
+sqlite3 data/ernie_downloads.db ".schema"
 
 # Query data
-sqlite3 ernie_downloads.db "SELECT * FROM model_downloads LIMIT 10"
+sqlite3 data/ernie_downloads.db "SELECT * FROM model_downloads LIMIT 10"
 ```
 
 ## Architecture
@@ -63,7 +63,7 @@ sqlite3 ernie_downloads.db "SELECT * FROM model_downloads LIMIT 10"
 ### Core Package: `ernie_tracker/`
 
 **Configuration (`config.py`)**
-- `DB_PATH`: Database file path (ernie_downloads.db)
+- `DB_PATH`: Database file path (`data/ernie_downloads.db`)
 - `DATA_TABLE`: Main table name (model_downloads)
 - `STATS_TABLE`: Platform statistics table (platform_stats)
 - `PLATFORM_NAMES`: Platform name mappings
@@ -84,6 +84,7 @@ The system uses a two-tier fetcher architecture:
    - Abstract base class `BaseFetcher` that all platform fetchers inherit from
    - Defines standard interface: `fetch(progress_callback, progress_total)`
    - Returns tuple: `(DataFrame, total_count)`
+   - Also contains `classify_model_category()`: infers `model_category` from model name and search_keyword (used by `create_record()`)
 
 2. **Unified Fetchers (`fetchers/fetchers_unified.py`)**
    - `UNIFIED_PLATFORM_FETCHERS`: Central registry mapping platform names to fetcher functions
@@ -100,6 +101,11 @@ The system uses a two-tier fetcher architecture:
    - `fetchers_api.py`: API-based platforms (ModelScope)
    - `fetchers_fixed_links.py`: Fixed URL list platforms (GitCode, CAICT)
    - `selenium.py`: Selenium-based scraping for platforms without APIs
+
+**Utilities (`utils.py`)**
+- `create_chrome_driver()`: Creates Chrome WebDriver with anti-detection settings; falls back to webdriver-manager if Selenium auto-management fails
+- `extract_numbers()`: Parses download counts supporting K/M/W suffixes (e.g., "7.3k" → 7300)
+- `retry_on_failure()`: Retries a callable up to N times with delay
 
 **Analysis Module (`analysis.py`)**
 - `calculate_weekly_report()`: Generates weekly comparison reports for ERNIE-4.5 or PaddleOCR-VL

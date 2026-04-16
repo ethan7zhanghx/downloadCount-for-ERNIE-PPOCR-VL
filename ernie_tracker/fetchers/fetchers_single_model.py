@@ -84,11 +84,16 @@ class HuggingFaceSingleFetcher(SingleModelFetcher):
     def __init__(self, target_date=None):
         super().__init__("Hugging Face", target_date)
 
+    @staticmethod
+    def _get_model_info(model_id):
+        """统一使用匿名请求，避免本地缓存 token 影响抓取。"""
+        return model_info(model_id, expand=["downloadsAllTime"], token=False)
+
     def refetch(self, model_name, publisher):
         """从Hugging Face API重新获取单个模型"""
         try:
             model_id = f"{publisher}/{model_name}"
-            info = model_info(model_id, expand=["downloadsAllTime"])
+            info = self._get_model_info(model_id)
             downloads = getattr(info, 'downloads_all_time', 0)
             url = f"https://huggingface.co/{model_id}"
 

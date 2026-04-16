@@ -75,6 +75,13 @@ OFFICIAL_MODEL_GROUPS = {
         ],
         'pattern': r'PaddleOCR-VL',
     },
+    'ERNIE-Image': {
+        'models': [
+            'baidu/ERNIE-Image',
+            'baidu/ERNIE-Image-Turbo',
+        ],
+        'pattern': r'ERNIE-Image',
+    },
 }
 
 

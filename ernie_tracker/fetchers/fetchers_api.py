@@ -16,12 +16,12 @@ class HuggingFaceFetcher(BaseFetcher):
         """抓取 Hugging Face 数据"""
         from huggingface_hub import list_models, model_info
 
-        models = list(list_models(search=SEARCH_QUERY, full=True))
+        models = list(list_models(search=SEARCH_QUERY, full=True, token=False))
         total_count = len(models)
 
         for i, m in enumerate(models, start=1):
             try:
-                info = model_info(m.id, expand=["downloadsAllTime"])
+                info = model_info(m.id, expand=["downloadsAllTime"], token=False)
                 self.results.append(self.create_record(
                     model_name=m.id,
                     publisher=m.id.split("/")[0],

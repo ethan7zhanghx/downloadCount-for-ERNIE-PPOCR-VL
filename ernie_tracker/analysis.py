@@ -52,14 +52,31 @@ MODEL_ORDER = [
 ]
 
 PADDLEOCR_VL_MODEL_ORDER = [
-    'PaddleOCR-VL'
+    'PaddleOCR-VL',
+    'PaddleOCR-VL-1.5',
 ]
+
+ERNIE_IMAGE_MODEL_ORDER = [
+    'ERNIE-Image',
+    'ERNIE-Image-Turbo',
+]
+
+# 模型系列名称到 model_category 的映射
+SERIES_TO_CATEGORY = {
+    'ERNIE-4.5': 'ernie-4.5',
+    'PaddleOCR-VL': 'paddleocr-vl',
+    'ERNIE-Image': 'ernie-image',
+}
 
 # 平台顺序
 REPO_ORDER = ['Hugging Face', 'AI Studio', 'ModelScope', 'GitCode', '其他']
 
 # 详细平台顺序（不合并"其他"）
 REPO_ORDER_DETAILED = ['Hugging Face', 'AI Studio', 'ModelScope', 'GitCode', '魔乐 Modelers', '鲸智', 'Gitee']
+
+# 官方模型累计下载量口径：仅统计 2026-03-11 及之后出现的历史最大值
+# （“2026-03-10 之后”按不含 2026-03-10 解释）
+OFFICIAL_PEAK_WINDOW_START = '2026-03-11'
 
 
 def get_last_friday(current_date=None):
@@ -150,6 +167,109 @@ def mark_official_models(data):
     data['is_official'] = data['publisher'].str.contains(pattern, case=False, na=False)
 
     return data
+
+
+def enforce_deduplication_and_standardization(df):
+    """
+    标准化模型名称并做同日同模型去重。
+
+    规则：
+    - 先移除 model_name 中可能存在的 publisher 前缀
+    - 再按 (date, repo, publisher, model_name) 去重，仅保留下载量最大的记录
+    """
+    if df.empty:
+        return df
+
+    df = normalize_model_names(df)
+    df['_dedup_publisher'] = df['publisher'].astype(str).str.lower()
+    df['_dedup_model_name'] = df['model_name'].astype(str).str.lower()
+    df['download_count'] = pd.to_numeric(df['download_count'], errors='coerce').fillna(0)
+
+    return df.sort_values(by='download_count', ascending=False).drop_duplicates(
+        subset=['date', 'repo', '_dedup_publisher', '_dedup_model_name'],
+        keep='first'
+    )
+
+
+def filter_by_series(df, model_series):
+    """
+    按模型系列筛选数据。
+
+    优先使用 model_category；若缺失，则退回到 model_name 关键词匹配。
+    """
+    if df.empty:
+        return df
+
+    if model_series == 'ERNIE-4.5':
+        if 'model_category' in df.columns:
+            condition = (
+                (df['model_category'] == 'ernie-4.5') |
+                (df['model_name'].str.contains('ERNIE-4.5', case=False, na=False))
+            )
+            return df[condition].copy()
+        return df[df['model_name'].str.contains('ERNIE-4.5', case=False, na=False)].copy()
+
+    if model_series == 'PaddleOCR-VL':
+        if 'model_category' in df.columns:
+            condition = (
+                (df['model_category'] == 'paddleocr-vl') |
+                (df['model_name'].str.contains('PaddleOCR-VL', case=False, na=False))
+            )
+            return df[condition].copy()
+        return df[df['model_name'].str.contains('PaddleOCR-VL', case=False, na=False)].copy()
+
+    if model_series == 'ERNIE-Image':
+        if 'model_category' in df.columns:
+            condition = (
+                (df['model_category'] == 'ernie-image') |
+                (df['model_name'].str.contains('ERNIE-Image', case=False, na=False))
+            )
+            return df[condition].copy()
+        return df[df['model_name'].str.contains('ERNIE-Image', case=False, na=False)].copy()
+
+    return df
+
+
+def build_peak_snapshot(df, cutoff_date, start_date=None):
+    """
+    构建截至 cutoff_date 的“历史最大值快照”。
+
+    对每个 (repo, publisher, model_name)，保留截止该日期前 download_count 最大的一条记录，
+    用于累计下载、平台汇总、榜单等“累计口径”统计。
+
+    Args:
+        df: 输入数据
+        cutoff_date: 截止日期（包含）
+        start_date: 起始日期（包含）；若提供且 cutoff_date 早于该日期，则忽略该起始限制
+    """
+    if df.empty:
+        return df.copy()
+
+    snapshot = df.copy()
+    if '_dedup_publisher' not in snapshot.columns or '_dedup_model_name' not in snapshot.columns:
+        snapshot = enforce_deduplication_and_standardization(snapshot)
+
+    snapshot['_snapshot_date'] = pd.to_datetime(snapshot['date'], errors='coerce')
+    cutoff_dt = pd.to_datetime(cutoff_date)
+    snapshot = snapshot[snapshot['_snapshot_date'] <= cutoff_dt].copy()
+
+    if start_date is not None and cutoff_dt >= pd.to_datetime(start_date):
+        start_dt = pd.to_datetime(start_date)
+        snapshot = snapshot[snapshot['_snapshot_date'] >= start_dt].copy()
+
+    if snapshot.empty:
+        return snapshot.drop(columns=['_snapshot_date'], errors='ignore')
+
+    snapshot = snapshot.sort_values(
+        by=['download_count', '_snapshot_date'],
+        ascending=[False, False]
+    ).drop_duplicates(
+        subset=['repo', '_dedup_publisher', '_dedup_model_name'],
+        keep='first'
+    )
+
+    snapshot['date'] = cutoff_date
+    return snapshot.drop(columns=['_snapshot_date'], errors='ignore')
 
 
 def create_pivot_table(data, repo_order=None, model_order=None, group_by_publisher=False, merge_other=True):
@@ -252,20 +372,13 @@ def get_all_new_models(current_date, previous_date, model_series='ERNIE-4.5'):
 
         # 🔧 修复：使用与 get_weekly_new_finetune_adapters() 相同的筛选逻辑
         # 根据 model_series 确定要筛选的 model_category
-        if model_series == 'ERNIE-4.5':
-            target_category = 'ernie-4.5'
-        elif model_series == 'PaddleOCR-VL':
-            target_category = 'paddleocr-vl'
-        else:
-            target_category = 'ernie-4.5'
+        target_category = SERIES_TO_CATEGORY.get(model_series, 'ernie-4.5')
 
         # 🔴 关键修复：先按 model_category 筛选模型系列，再判断新增
         # 新增判断只看 (repo, publisher, model_name) 三元组，不受 model_category 缺失影响
         # 筛选策略：model_category 正确 OR model_name 包含关键词
-        if model_series == 'ERNIE-4.5':
-            name_pattern = 'ERNIE-4.5'
-        else:  # PaddleOCR-VL
-            name_pattern = 'PaddleOCR-VL'
+        _name_patterns = {'ERNIE-4.5': 'ERNIE-4.5', 'PaddleOCR-VL': 'PaddleOCR-VL', 'ERNIE-Image': 'ERNIE-Image'}
+        name_pattern = _name_patterns.get(model_series, model_series)
 
         # 使用 model_category OR model_name 筛选，确保不遗漏因 model_category 缺失的模型
         hf_current = current_data[
@@ -362,7 +475,12 @@ def calculate_weekly_report(current_date=None, previous_date=None, model_order=N
         dict: 包含各种统计数据的字典
     """
     if model_order is None:
-        model_order = MODEL_ORDER if model_series == 'ERNIE-4.5' else PADDLEOCR_VL_MODEL_ORDER
+        if model_series == 'ERNIE-4.5':
+            model_order = MODEL_ORDER
+        elif model_series == 'ERNIE-Image':
+            model_order = ERNIE_IMAGE_MODEL_ORDER
+        else:
+            model_order = PADDLEOCR_VL_MODEL_ORDER
 
     # 设置日期
     if current_date is None:
@@ -370,90 +488,56 @@ def calculate_weekly_report(current_date=None, previous_date=None, model_order=N
     if previous_date is None:
         previous_date = get_last_friday(current_date)
 
-    # 🔧 修复：使用 load_data_from_db() 获取去重后的数据
-    # 这确保了重复记录只取最大下载量，避免重复计算
-    # 官方/非官方的当日统计都应使用当天记录，不做“取最近有值”回填
-    current_data = load_data_from_db(date_filter=current_date, last_value_per_model=False)
-    previous_data = load_data_from_db(date_filter=previous_date, last_value_per_model=False)
-
-    # 负增长检测使用真实的当日记录（不带 last_value_per_model），单独加载
+    # 负增长检测仍然使用真实的当日记录（不做历史峰值回填）
     warn_current_raw = load_data_from_db(date_filter=current_date, last_value_per_model=False)
     warn_previous_raw = load_data_from_db(date_filter=previous_date, last_value_per_model=False)
+    warn_current_raw = filter_by_series(
+        enforce_deduplication_and_standardization(warn_current_raw),
+        model_series
+    )
+    warn_previous_raw = filter_by_series(
+        enforce_deduplication_and_standardization(warn_previous_raw),
+        model_series
+    )
 
-    # 🔴 关键修复：在合并和进一步处理之前，对数据进行强制标准化和二次去重
-    # 确保即使数据库中存在不一致，也能在分析时得到修正
-    def enforce_deduplication_and_standardization(df):
-        if df.empty:
-            return df
+    # 周报主体统计使用“截止日期历史最大值快照”：
+    # 对每个 (repo, publisher, model_name) 取截止日期前 download_count 最大值
+    full_data = load_data_from_db(date_filter=None, last_value_per_model=False)
+    full_data = enforce_deduplication_and_standardization(full_data)
+    full_data = filter_by_series(full_data, model_series)
 
-        # 1. 标准化模型名称（移除 publisher 前缀）
-        df = normalize_model_names(df)
-
-        # 2. 创建小写 key 用于去重，但保留原始大小写
-        df['_dedup_publisher'] = df['publisher'].astype(str).str.lower()
-        df['_dedup_model_name'] = df['model_name'].astype(str).str.lower()
-
-        # 3. 再次去重，确保同一 (date, repo, publisher, model_name) 只有一条记录，且下载量最大
-        df['download_count'] = pd.to_numeric(df['download_count'], errors='coerce').fillna(0)
-        df = df.sort_values(by='download_count', ascending=False).drop_duplicates(
-            subset=['date', 'repo', '_dedup_publisher', '_dedup_model_name'], keep='first'
-        )
-        return df
-
-    current_data = enforce_deduplication_and_standardization(current_data)
-    previous_data = enforce_deduplication_and_standardization(previous_data)
-    warn_current_raw = enforce_deduplication_and_standardization(warn_current_raw)
-    warn_previous_raw = enforce_deduplication_and_standardization(warn_previous_raw)
-
-    # 合并两个日期的数据
-    data = pd.concat([current_data, previous_data], ignore_index=True)
-
-    if data.empty:
+    if full_data.empty:
         return None
-
-    # 🔴 重要：标准化模型名称（移除 publisher 前缀）
-    # 这一步在 enforce_deduplication_and_standardization 中已经完成，此处可以移除或保留作为冗余检查
-    # 为了避免重复处理，此处不再重复调用 normalize_model_names
-    # data = normalize_model_names(data)
-
-    def filter_by_series(df):
-        """按系列过滤数据，用于官方与衍生共用的筛选逻辑。"""
-        if df.empty:
-            return df
-        if model_series == 'ERNIE-4.5':
-            if 'model_category' in df.columns:
-                condition = (
-                    (df['model_category'] == 'ernie-4.5') |
-                    (df['model_name'].str.contains('ERNIE-4.5', case=False, na=False))
-                )
-                return df[condition].copy()
-            return df[df['model_name'].str.contains('ERNIE-4.5', case=False, na=False)].copy()
-        if model_series == 'PaddleOCR-VL':
-            if 'model_category' in df.columns:
-                condition = (
-                    (df['model_category'] == 'paddleocr-vl') |
-                    (df['model_name'].str.contains('PaddleOCR-VL', case=False, na=False))
-                )
-                return df[condition].copy()
-            return df[df['model_name'].str.contains('PaddleOCR-VL', case=False, na=False)].copy()
-        return df
-
-    # 🔧 修复：根据 model_series 使用 model_category 字段 **或** 模型名称筛选
-    # 这样既能包含正确分类的衍生模型，也能包含其他平台的官方模型
-    data = filter_by_series(data)
-
-    if data.empty:
-        print(f"警告: 在选定日期内未找到 {model_series} 系列的模型数据。")
-        return None
-
-    # 确保 'download_count' 是数值类型
-    data['download_count'] = pd.to_numeric(data['download_count'], errors='coerce').fillna(0)
 
     # 标记官方模型
-    data = mark_official_models(data)
-    # 负增长检测用的原始当日数据也需要官方标记
+    full_data = mark_official_models(full_data)
     warn_current_raw = mark_official_models(warn_current_raw)
     warn_previous_raw = mark_official_models(warn_previous_raw)
+
+    # 构建两个日期对应的历史峰值快照：
+    # - 官方模型：仅取 2026-02-01 至截止日期之间的最大值
+    # - 衍生模型：保持全历史最大值口径
+    official_full_data = full_data[full_data['is_official'] == True].copy()
+    derivative_full_data = full_data[full_data['is_official'] == False].copy()
+
+    current_snapshot = pd.concat([
+        build_peak_snapshot(
+            official_full_data,
+            current_date,
+            start_date=OFFICIAL_PEAK_WINDOW_START
+        ),
+        build_peak_snapshot(derivative_full_data, current_date)
+    ], ignore_index=True)
+
+    previous_snapshot = pd.concat([
+        build_peak_snapshot(
+            official_full_data,
+            previous_date,
+            start_date=OFFICIAL_PEAK_WINDOW_START
+        ),
+        build_peak_snapshot(derivative_full_data, previous_date)
+    ], ignore_index=True)
+    data = pd.concat([current_snapshot, previous_snapshot], ignore_index=True)
 
     # 筛选官方模型
     official_data = data[data['is_official'] == True].copy()
@@ -463,8 +547,8 @@ def calculate_weekly_report(current_date=None, previous_date=None, model_order=N
         return None
 
     # --- 全量数据透视 (用于平台总览和详细数据) ---
-    all_current_data = data[data['date'] == current_date]
-    all_previous_data = data[data['date'] == previous_date]
+    all_current_data = current_snapshot.copy()
+    all_previous_data = previous_snapshot.copy()
     current_pivot = create_pivot_table(all_current_data, model_order=model_order, merge_other=True)
     previous_pivot = create_pivot_table(all_previous_data, model_order=model_order, merge_other=True)
     growth_pivot = current_pivot - previous_pivot
@@ -587,86 +671,30 @@ def calculate_weekly_report(current_date=None, previous_date=None, model_order=N
             # '其他'平台目前没有区分衍生模型
             platform_top_models.append({'platform': repo, 'official_tops': official_tops, 'derivative_tops': None})
 
-    # 加载全量数据用于历史峰值计算
-    full_data = load_data_from_db(date_filter=None, last_value_per_model=False)
-    full_data = enforce_deduplication_and_standardization(full_data)
-    full_data = filter_by_series(full_data)
-    if not full_data.empty:
-        full_data['download_count'] = pd.to_numeric(full_data['download_count'], errors='coerce').fillna(0)
-        full_data = mark_official_models(full_data)
-        # 便于日期比较，转换为 datetime
-        full_data['date'] = pd.to_datetime(full_data['date'])
-        current_dt = pd.to_datetime(current_date)
-        previous_dt = pd.to_datetime(previous_date)
+    # ========== 总体情况摘要 ==========
+    # 统一使用“历史最大值快照”口径，避免某天抓取缺失导致累计值回退
+    official_current_total = current_snapshot[current_snapshot['is_official'] == True]['download_count'].sum()
+    official_previous_total = previous_snapshot[previous_snapshot['is_official'] == True]['download_count'].sum()
+    official_growth = official_current_total - official_previous_total
 
-        def peak_total_by_type(df, cutoff_dt, is_official):
-            """统计衍生模型的历史峰值总和"""
-            subset = df[(df['is_official'] == is_official) & (df['date'] <= cutoff_dt)]
-            if subset.empty:
-                return 0
-            peak_per_combo = subset.groupby(['repo', 'publisher', 'model_name'])['download_count'].max()
-            return peak_per_combo.sum()
+    derivative_current_total = current_snapshot[current_snapshot['is_official'] == False]['download_count'].sum()
+    derivative_previous_total = previous_snapshot[previous_snapshot['is_official'] == False]['download_count'].sum()
+    derivative_growth = derivative_current_total - derivative_previous_total
 
-        def peak_total_by_platform(df, cutoff_dt, is_official):
-            """统计衍生模型按平台的历史峰值"""
-            subset = df[(df['is_official'] == is_official) & (df['date'] <= cutoff_dt)]
-            if subset.empty:
-                return pd.Series()
-            peak_per_model = subset.groupby(['repo', 'publisher', 'model_name'])['download_count'].max()
-            # 按平台汇总
-            platform_totals = peak_per_model.groupby('repo').sum()
-            return platform_totals
+    all_current_total = official_current_total + derivative_current_total
+    all_previous_total = official_previous_total + derivative_previous_total
+    all_growth = all_current_total - all_previous_total
 
-        # ========== 总体情况摘要 ==========
-        # 官方模型：使用当日值
-        official_current_total = official_data[official_data['date'] == current_date]['download_count'].sum()
-        official_previous_total = official_data[official_data['date'] == previous_date]['download_count'].sum()
-        official_growth = official_current_total - official_previous_total
+    # ========== 平台汇总 ==========
+    current_platform_totals = current_snapshot.groupby('repo')['download_count'].sum()
+    previous_platform_totals = previous_snapshot.groupby('repo')['download_count'].sum()
 
-        # 衍生模型：使用历史峰值
-        derivative_current_total = peak_total_by_type(full_data, current_dt, is_official=False)
-        derivative_previous_total = peak_total_by_type(full_data, previous_dt, is_official=False)
-        derivative_growth = derivative_current_total - derivative_previous_total
+    # 为了在平台汇总中显示"其他"的汇总数据，需要将 Gitee, Modelers, 鲸智合并为"其他"
+    current_platform_totals = current_platform_totals.rename(index={'魔乐 Modelers': '其他', '鲸智': '其他', 'Gitee': '其他'})
+    current_platform_totals = current_platform_totals.groupby(level=0).sum()
 
-        # 汇总总数（官方=当日值，衍生=历史峰值）
-        all_current_total = official_current_total + derivative_current_total
-        all_previous_total = official_previous_total + derivative_previous_total
-        all_growth = all_current_total - all_previous_total
-
-        # ========== 平台汇总（官方用当日值，衍生用历史峰值） ==========
-        # 官方模型：使用当日值按平台统计
-        current_official_data_by_date = official_data[official_data['date'] == current_date]
-        previous_official_data_by_date = official_data[official_data['date'] == previous_date]
-        current_official_platforms = current_official_data_by_date.groupby('repo')['download_count'].sum()
-        previous_official_platforms = previous_official_data_by_date.groupby('repo')['download_count'].sum()
-
-        # 衍生模型：使用历史峰值按平台统计
-        current_derivative_platforms = peak_total_by_platform(full_data, current_dt, is_official=False)
-        previous_derivative_platforms = peak_total_by_platform(full_data, previous_dt, is_official=False)
-
-        # 合并官方和衍生模型
-        current_platform_totals = current_official_platforms.add(current_derivative_platforms, fill_value=0)
-        previous_platform_totals = previous_official_platforms.add(previous_derivative_platforms, fill_value=0)
-
-        # 为了在平台汇总中显示"其他"的汇总数据，需要将 Gitee, Modelers, 鲸智合并为"其他"
-        current_platform_totals = current_platform_totals.rename(index={'魔乐 Modelers': '其他', '鲸智': '其他', 'Gitee': '其他'})
-        current_platform_totals = current_platform_totals.groupby(level=0).sum()
-
-        previous_platform_totals = previous_platform_totals.rename(index={'魔乐 Modelers': '其他', '鲸智': '其他', 'Gitee': '其他'})
-        previous_platform_totals = previous_platform_totals.groupby(level=0).sum()
-    else:
-        # 数据为空时的默认值
-        official_current_total = 0
-        official_previous_total = 0
-        official_growth = 0
-        derivative_current_total = 0
-        derivative_previous_total = 0
-        derivative_growth = 0
-        all_current_total = 0
-        all_previous_total = 0
-        all_growth = 0
-        current_platform_totals = pd.Series()
-        previous_platform_totals = pd.Series()
+    previous_platform_totals = previous_platform_totals.rename(index={'魔乐 Modelers': '其他', '鲸智': '其他', 'Gitee': '其他'})
+    previous_platform_totals = previous_platform_totals.groupby(level=0).sum()
 
     # 合并并确保数值类型，避免TypeError
     platform_summary = pd.DataFrame({
@@ -761,11 +789,11 @@ def calculate_weekly_report(current_date=None, previous_date=None, model_order=N
     # 统计模型数量（按类别、按是否原始）——衍生模型计数采用回填（取当前日期及之前的最后一条）
     backfill_for_count = load_data_from_db(date_filter=current_date, last_value_per_model=True)
     backfill_for_count = enforce_deduplication_and_standardization(backfill_for_count)
-    backfill_for_count = filter_by_series(backfill_for_count)
+    backfill_for_count = filter_by_series(backfill_for_count, model_series)
     backfill_for_count = mark_official_models(backfill_for_count)
     derivative_current_total_models = len(
         backfill_for_count[
-            (backfill_for_count['model_category'] == ('ernie-4.5' if model_series == 'ERNIE-4.5' else 'paddleocr-vl')) &
+            (backfill_for_count['model_category'] == SERIES_TO_CATEGORY.get(model_series, 'ernie-4.5')) &
             (backfill_for_count['model_type'] != 'original')
         ]
     )
@@ -1097,7 +1125,7 @@ def get_deleted_or_hidden_models(current_date, model_series='ERNIE-4.5'):
             return []
 
         # 3. 筛选目标系列的衍生模型
-        target_category = 'ernie-4.5' if model_series == 'ERNIE-4.5' else 'paddleocr-vl'
+        target_category = SERIES_TO_CATEGORY.get(model_series, 'ernie-4.5')
 
         # 历史中的衍生模型
         historical_derivatives = all_historical[
@@ -1279,7 +1307,8 @@ def analyze_derivative_models_all_platforms(df, selected_series=None):
     if 'is_official' not in df.columns:
         df = mark_official_models(df)
 
-    # 按系列筛选（所有记录现在都有 model_category 字段）
+    # 按系列筛选：优先用 model_category，缺失时用 model_name 关键词兜底
+    # 目的：避免某些平台当日分类字段缺失导致模型被误排除。
     if selected_series:
         series_mapping = {
             "ERNIE-4.5": "ernie-4.5",
@@ -1287,7 +1316,28 @@ def analyze_derivative_models_all_platforms(df, selected_series=None):
         }
 
         selected_categories = [series_mapping.get(s, s) for s in selected_series]
-        df = df[df['model_category'].isin(selected_categories)].copy()
+        conditions = []
+        for category in selected_categories:
+            if category == 'ernie-4.5':
+                name_pattern = 'ERNIE-4.5'
+            elif category == 'paddleocr-vl':
+                name_pattern = 'PaddleOCR-VL'
+            else:
+                name_pattern = category
+
+            condition = (
+                (df['model_category'] == category) |
+                (df['model_name'].astype(str).str.contains(name_pattern, case=False, na=False))
+            )
+            conditions.append(condition)
+
+        if conditions:
+            combined_condition = conditions[0]
+            for condition in conditions[1:]:
+                combined_condition = combined_condition | condition
+            df = df[combined_condition].copy()
+        else:
+            df = df.iloc[0:0].copy()
 
     # 统计总数
     total_models = len(df)
@@ -1302,7 +1352,7 @@ def analyze_derivative_models_all_platforms(df, selected_series=None):
     by_platform = {}
     for platform in df['repo'].unique():
         platform_df = df[df['repo'] == platform]
-        platform_derivative_df = derivative_models_df[derivative_models_df['repo'] == platform]
+        platform_derivative_df = derivative_models_df[derivative_models_df['repo'] == platform].copy()
 
         # 计算下载量（转换为数值）
         platform_derivative_df['download_count_num'] = pd.to_numeric(
@@ -1367,6 +1417,126 @@ def analyze_derivative_models_all_platforms(df, selected_series=None):
         'by_series': by_series,
         'derivative_models_df': derivative_models_df
     }
+
+
+def calculate_recent_derivative_velocity_top(
+    derivative_models_df,
+    raw_df,
+    selected_date,
+    months=2,
+    top_n=10
+):
+    """
+    统计“近 N 个月内发布”的衍生模型中，平均日下载量最高的 Top N。
+
+    口径：
+    - 模型集合：使用 selected_date 截止时仍可见的衍生模型快照
+    - 发布时间：优先使用 created_at；若缺失，则回退到该模型在库中的首次出现日期
+    - 平均单位时长：按“平均日下载量”计算 = 当前下载量 / 上线天数
+
+    Args:
+        derivative_models_df: 当前快照中的衍生模型 DataFrame
+        raw_df: 全量原始历史记录（last_value_per_model=False）
+        selected_date: 截止日期
+        months: 近几个月
+        top_n: 返回前 N 个
+
+    Returns:
+        DataFrame
+    """
+    if derivative_models_df is None or derivative_models_df.empty:
+        return pd.DataFrame()
+
+    selected_dt = pd.to_datetime(selected_date, errors='coerce')
+    if pd.isna(selected_dt):
+        return pd.DataFrame()
+
+    result_df = derivative_models_df.copy()
+    result_df = normalize_model_names(result_df)
+
+    if '_dedup_publisher' not in result_df.columns:
+        result_df['_dedup_publisher'] = result_df['publisher'].astype(str).str.lower()
+    if '_dedup_model_name' not in result_df.columns:
+        result_df['_dedup_model_name'] = result_df['model_name'].astype(str).str.lower()
+
+    result_df['download_count'] = pd.to_numeric(result_df['download_count'], errors='coerce').fillna(0)
+
+    # 优先使用 created_at
+    if 'created_at' in result_df.columns:
+        result_df['created_at_parsed'] = pd.to_datetime(result_df['created_at'], errors='coerce')
+    else:
+        result_df['created_at_parsed'] = pd.NaT
+
+    # 回退到首次入库日期
+    if raw_df is not None and not raw_df.empty:
+        raw_df = raw_df.copy()
+        raw_df = normalize_model_names(raw_df)
+        raw_df['_dedup_publisher'] = raw_df['publisher'].astype(str).str.lower()
+        raw_df['_dedup_model_name'] = raw_df['model_name'].astype(str).str.lower()
+        raw_df['date'] = pd.to_datetime(raw_df['date'], errors='coerce')
+
+        first_seen_df = raw_df.groupby(
+            ['repo', '_dedup_publisher', '_dedup_model_name'],
+            as_index=False
+        )['date'].min().rename(columns={'date': 'first_seen_date'})
+
+        result_df = result_df.merge(
+            first_seen_df,
+            on=['repo', '_dedup_publisher', '_dedup_model_name'],
+            how='left'
+        )
+    else:
+        result_df['first_seen_date'] = pd.NaT
+
+    result_df['publish_date'] = result_df['created_at_parsed'].where(
+        result_df['created_at_parsed'].notna(),
+        result_df['first_seen_date']
+    )
+    result_df['publish_date_source'] = np.where(
+        result_df['created_at_parsed'].notna(),
+        'created_at',
+        np.where(result_df['first_seen_date'].notna(), 'first_seen', 'unknown')
+    )
+
+    window_start = selected_dt - pd.DateOffset(months=months)
+    result_df = result_df[
+        result_df['publish_date'].notna() &
+        (result_df['publish_date'] >= window_start) &
+        (result_df['publish_date'] <= selected_dt)
+    ].copy()
+
+    if result_df.empty:
+        return pd.DataFrame()
+
+    result_df['days_since_publish'] = (
+        (selected_dt.normalize() - result_df['publish_date'].dt.normalize()).dt.days
+    ).clip(lower=1)
+    result_df['avg_downloads_per_day'] = result_df['download_count'] / result_df['days_since_publish']
+
+    result_df = result_df.sort_values(
+        by=['avg_downloads_per_day', 'download_count'],
+        ascending=[False, False]
+    ).copy()
+
+    if top_n is not None:
+        result_df = result_df.head(top_n).copy()
+
+    result_df['publish_date'] = result_df['publish_date'].dt.strftime('%Y-%m-%d')
+    result_df['avg_downloads_per_day'] = result_df['avg_downloads_per_day'].round(2)
+
+    return result_df[[
+        'model_name',
+        'publisher',
+        'repo',
+        'model_category',
+        'model_type',
+        'download_count',
+        'publish_date',
+        'publish_date_source',
+        'days_since_publish',
+        'avg_downloads_per_day',
+        'url'
+    ]].copy()
 
 
 def get_quarter_start_date(current_date):
@@ -1471,6 +1641,50 @@ def calculate_periodic_stats(current_date, selected_series=None, base_date=None)
     current_data = standardize(current_data)
     last_week_data = standardize(last_week_data)
     quarter_start_data = standardize(quarter_start_data)
+
+    # 修复：旧快照可能出现 model_category 为空（例如后续采集中才补齐分类），
+    # 会导致“已存在模型”在系列筛选后被误判为新增。
+    def is_missing_category(v):
+        return str(v).strip().lower() in ('', 'none', 'nan')
+
+    def backfill_model_category(*dfs):
+        # 以 current -> base -> quarter 的优先顺序构建分类映射
+        category_map = {}
+        for df in dfs:
+            if df.empty:
+                continue
+            for row in df[['repo', '_dedup_publisher', '_dedup_model_name', 'model_category']].itertuples(index=False, name=None):
+                repo, pub_key, model_key, model_category = row
+                if is_missing_category(model_category):
+                    continue
+                key = (repo, pub_key, model_key)
+                if key not in category_map:
+                    category_map[key] = model_category
+
+        if not category_map:
+            return dfs
+
+        output = []
+        for df in dfs:
+            if df.empty:
+                output.append(df)
+                continue
+            df = df.copy()
+            missing_mask = df['model_category'].apply(is_missing_category)
+            if missing_mask.any():
+                df.loc[missing_mask, 'model_category'] = df.loc[missing_mask].apply(
+                    lambda row: category_map.get(
+                        (row['repo'], row['_dedup_publisher'], row['_dedup_model_name']),
+                        row['model_category']
+                    ),
+                    axis=1
+                )
+            output.append(df)
+        return tuple(output)
+
+    current_data, last_week_data, quarter_start_data = backfill_model_category(
+        current_data, last_week_data, quarter_start_data
+    )
 
     # 标记官方模型
     current_data = mark_official_models(current_data)
