@@ -3358,8 +3358,8 @@ elif page == "🌳 衍生模型生态":
         with col_config3:
             selected_series = st.multiselect(
                 "🎯 模型系列筛选",
-                options=["ERNIE-4.5", "PaddleOCR-VL"],
-                default=["ERNIE-4.5", "PaddleOCR-VL"],
+                options=["ERNIE-4.5", "PaddleOCR-VL", "ERNIE-Image"],
+                default=["ERNIE-4.5", "PaddleOCR-VL", "ERNIE-Image"],
                 help="可以选择一个或多个模型系列进行分析"
             )
 
