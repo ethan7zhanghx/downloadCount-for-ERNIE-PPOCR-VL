@@ -1312,7 +1312,8 @@ def analyze_derivative_models_all_platforms(df, selected_series=None):
     if selected_series:
         series_mapping = {
             "ERNIE-4.5": "ernie-4.5",
-            "PaddleOCR-VL": "paddleocr-vl"
+            "PaddleOCR-VL": "paddleocr-vl",
+            "ERNIE-Image": "ernie-image"
         }
 
         selected_categories = [series_mapping.get(s, s) for s in selected_series]
@@ -1322,6 +1323,8 @@ def analyze_derivative_models_all_platforms(df, selected_series=None):
                 name_pattern = 'ERNIE-4.5'
             elif category == 'paddleocr-vl':
                 name_pattern = 'PaddleOCR-VL'
+            elif category == 'ernie-image':
+                name_pattern = 'ERNIE-Image'
             else:
                 name_pattern = category
 
@@ -1371,7 +1374,8 @@ def analyze_derivative_models_all_platforms(df, selected_series=None):
         if selected_series and 'model_category' in platform_derivative_df.columns:
             series_mapping = {
                 "ERNIE-4.5": "ernie-4.5",
-                "PaddleOCR-VL": "paddleocr-vl"
+                "PaddleOCR-VL": "paddleocr-vl",
+                "ERNIE-Image": "ernie-image"
             }
 
             for series in selected_series:
@@ -1697,7 +1701,8 @@ def calculate_periodic_stats(current_date, selected_series=None, base_date=None)
             return df
         series_mapping = {
             "ERNIE-4.5": "ernie-4.5",
-            "PaddleOCR-VL": "paddleocr-vl"
+            "PaddleOCR-VL": "paddleocr-vl",
+            "ERNIE-Image": "ernie-image"
         }
         selected_categories = [series_mapping.get(s, s) for s in selected_series]
 
@@ -1873,7 +1878,7 @@ def get_deleted_derivative_models_all_platforms(current_date, selected_series=No
 
         # 6. 按系列筛选（如果指定）
         if selected_series:
-            series_mapping = {"ERNIE-4.5": "ernie-4.5", "PaddleOCR-VL": "paddleocr-vl"}
+            series_mapping = {"ERNIE-4.5": "ernie-4.5", "PaddleOCR-VL": "paddleocr-vl", "ERNIE-Image": "ernie-image"}
             selected_categories = [series_mapping.get(s, s) for s in selected_series]
             historical_derivatives = historical_derivatives[
                 historical_derivatives['model_category'].isin(selected_categories)
@@ -2018,7 +2023,7 @@ def get_models_needing_backfill(current_date, selected_series=None):
 
         # 4. 按系列筛选（如果指定）
         if selected_series:
-            series_mapping = {"ERNIE-4.5": "ernie-4.5", "PaddleOCR-VL": "paddleocr-vl"}
+            series_mapping = {"ERNIE-4.5": "ernie-4.5", "PaddleOCR-VL": "paddleocr-vl", "ERNIE-Image": "ernie-image"}
             selected_categories = [series_mapping.get(s, s) for s in selected_series]
             current_derivatives = current_derivatives[
                 current_derivatives['model_category'].isin(selected_categories)
