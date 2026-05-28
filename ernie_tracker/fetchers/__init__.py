@@ -6,6 +6,7 @@ from .fetchers_unified import (
 from .selenium import AIStudioFetcher, ModelersFetcher, GiteeFetcher
 from .fetchers_api import HuggingFaceFetcher, ModelScopeFetcher
 from .fetchers_fixed_links import GitCodeFetcher, CAICTFetcher
+from .fetchers_civitai import CivitaiFetcher
 from .fetchers_modeltree import (
     classify_model,
     classify_model_type,
@@ -24,6 +25,7 @@ __all__ = [
     "ModelScopeFetcher",
     "GitCodeFetcher",
     "CAICTFetcher",
+    "CivitaiFetcher",
     "classify_model",
     "classify_model_type",
     "get_all_ernie_derivatives",

@@ -1,5 +1,4 @@
 """固定链接爬虫实现 - GitCode 和 CAICT（鲸智）"""
-import time
 import requests
 from .base_fetcher import BaseFetcher
 from ..utils import create_chrome_driver
@@ -17,6 +16,12 @@ GITCODE_HEADERS = {
 }
 
 
+def _parse_gitcode_datetime(value):
+    if not value:
+        return None
+    return str(value).split("T", 1)[0].split(" ", 1)[0]
+
+
 class GitCodeFetcher(BaseFetcher):
     """GitCode 爬虫（通过 API 获取下载量，无需 Selenium）"""
 
@@ -24,11 +29,11 @@ class GitCodeFetcher(BaseFetcher):
         super().__init__("GitCode")
 
     def _get_repo_id(self, namespace, repo_name, session):
-        """通过 namespace/repo_name 获取数字 repo ID"""
+        """通过 namespace/repo_name 获取项目信息"""
         url = f"{GITCODE_API_BASE}/api/v2/projects/{namespace}%2F{repo_name}"
         resp = session.get(url, headers=GITCODE_HEADERS, timeout=30)
         resp.raise_for_status()
-        return resp.json()["id"]
+        return resp.json()
 
     def _get_download_count(self, repo_id, session):
         """通过 repo ID 获取总下载量"""
@@ -36,8 +41,10 @@ class GitCodeFetcher(BaseFetcher):
         resp = session.get(url, headers=GITCODE_HEADERS, timeout=30)
         resp.raise_for_status()
         data = resp.json()
-        if isinstance(data, list) and len(data) > 0:
-            return data[0].get("total_dl_cnt", 0)
+        if isinstance(data, list) and data:
+            return max(int(item.get("total_dl_cnt") or 0) for item in data)
+        if isinstance(data, dict):
+            return int(data.get("total_dl_cnt") or data.get("downloads") or 0)
         return 0
 
     def fetch(self, progress_callback=None, progress_total=None):
@@ -53,13 +60,22 @@ class GitCodeFetcher(BaseFetcher):
                 model_name = url_parts[-1]
                 namespace = url_parts[-2]
 
-                repo_id = self._get_repo_id(namespace, model_name, session)
+                project = self._get_repo_id(namespace, model_name, session)
+                repo_id = project["id"]
                 download_count = self._get_download_count(repo_id, session)
+                publisher = (
+                    str(project.get("name_with_namespace", "")).split("/", 1)[0].strip()
+                    or "飞桨PaddlePaddle"
+                )
+                model_name = project.get("path") or project.get("name") or model_name
 
                 self.results.append(self.create_record(
                     model_name=model_name,
-                    publisher="飞桨PaddlePaddle",
-                    download_count=download_count
+                    publisher=publisher,
+                    download_count=download_count,
+                    url=model_link,
+                    created_at=_parse_gitcode_datetime(project.get("created_at")),
+                    last_modified=_parse_gitcode_datetime(project.get("last_activity_at") or project.get("updated_at")),
                 ))
                 print(f"[GitCode] {i}/{total_count} {model_name}: {download_count}")
 

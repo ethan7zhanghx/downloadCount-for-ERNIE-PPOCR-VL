@@ -337,141 +337,11 @@ def fetch_aistudio_data_unified(progress_callback=None, progress_total=None):
 # GitCode (包含ERNIE-4.5和PaddleOCR-VL)
 def fetch_gitcode_data_unified(progress_callback=None, progress_total=None):
     """统一获取GitCode上的PaddlePaddle模型（包含ERNIE-4.5和PaddleOCR-VL）"""
-    today = date.today().isoformat()
-    driver = create_chrome_driver(headless=False)
-    wait = WebDriverWait(driver, 40)
+    from .fetchers_fixed_links import GitCodeFetcher
 
-    results = []
-
-    # ERNIE-4.5 模型列表
-    ernie_model_links = [
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-VL-424B-A47B-Paddle",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-VL-28B-A3B-PT",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-VL-424B-A47B-PT",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-21B-A3B-Base-Paddle",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-21B-A3B-Paddle",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-300B-A47B-PT",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-21B-A3B-Base-PT",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-21B-A3B-PT",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-300B-A47B-FP8-Paddle",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-300B-A47B-Paddle",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-0.3B-PT",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-0.3B-Base-PT",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-300B-A47B-Base-Paddle",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-0.3B-Base-Paddle",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-0.3B-Paddle",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-VL-424B-A47B-Base-PT",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-VL-424B-A47B-Base-Paddle",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-VL-28B-A3B-Base-PT",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-VL-28B-A3B-Base-Paddle",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-VL-28B-A3B-Paddle",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-300B-A47B-Base-PT",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-300B-A47B-W4A8C8-TP4-Paddle",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-Image",
-        "https://ai.gitcode.com/paddlepaddle/ERNIE-Image-Turbo"
-    ]
-
-    # PaddleOCR-VL 模型
-    paddleocr_model_links = [
-        "https://ai.gitcode.com/paddlepaddle/PaddleOCR-VL"
-    ]
-
-    # 合并所有模型链接
-    all_model_links = ernie_model_links + paddleocr_model_links
-    total_count = len(all_model_links)
-
-    for i, model_link in enumerate(all_model_links, start=1):
-        try:
-            driver.get(model_link)
-            print(f"访问链接: {model_link}")
-            # 等待 URL 变化或页面加载完成
-            try:
-                wait.until(EC.url_changes(model_link))
-            except TimeoutException:
-                print(f"URL 未变化，可能没有重定向或页面加载缓慢: {driver.current_url}")
-            wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-            time.sleep(1) # 额外等待，确保URL更新
-            print(f"当前页面URL (加载后): {driver.current_url}")
-
-            model_name_selector = "#repo-banner-box > div > div.repo-info.h-full.ai-hub > div > div:nth-child(1) > div > div > div.info-item.project-name > div.project-text > div > p > a > span"
-            model_name = wait.until(
-                EC.visibility_of_element_located((By.CSS_SELECTOR, model_name_selector))
-            ).text.strip()
-
-            # 检查是否重定向到 /model-inference 页面
-            if "/model-inference" in driver.current_url:
-                print(f"检测到重定向到 /model-inference 页面: {driver.current_url}")
-                try:
-                    # 点击“模型介绍”标签回到原始页面
-                    model_intro_selector = "#repo-header-tab > div.nav-tabs-item.flex-1.w-\[100\%\].overflow-hidden > div > div.repo-header-tab-ul > a:nth-child(1) > div"
-                    print(f"尝试点击元素: {model_intro_selector}")
-                    model_intro_element = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, model_intro_selector)))
-                    model_intro_element.click()
-                    print("已点击“模型介绍”标签，等待页面加载...")
-                    # 等待 URL 变化回原始链接，并等待下载量元素重新出现
-                    wait.until(EC.url_contains(model_link.split('?')[0]))
-                    wait.until(EC.presence_of_element_located((By.XPATH, '//*[@id="app"]/div/div[2]/div[2]/div/div/div/div/div/div[2]/div[1]/div[1]/div/div[2]')))
-                    time.sleep(3) # 额外等待，确保页面稳定和元素可见
-                    print(f"点击后当前页面URL: {driver.current_url}")
-                except Exception as click_e:
-                    print(f"点击“模型介绍”标签或等待页面加载失败: {click_e}")
-                    downloads = "0" # 如果点击失败，则无法获取下载量
-            
-            downloads = "0" # 默认值
-            if downloads == "0": # 如果之前点击失败导致 downloads 为 "0"，则不再尝试获取
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        time.sleep(2) # Add a small delay to allow the page to stabilize
-                        # 尝试原始 XPath 获取下载量
-                        downloads_xpath = '//*[@id="app"]/div/div[2]/div[2]/div/div/div/div/div/div[2]/div[1]/div[1]/div/div[2]'
-                        print(f"尝试获取下载量元素: {downloads_xpath}")
-                        downloads_element = wait.until(EC.presence_of_element_located((By.XPATH, downloads_xpath)))
-                        last_val = ""
-                        for _ in range(5):
-                            # Re-locate the element in each iteration to avoid StaleElementReferenceException
-                            downloads_element = wait.until(EC.presence_of_element_located((By.XPATH, downloads_xpath)))
-                            val = downloads_element.text.strip().replace(',', '')
-                            if val and val != last_val:
-                                last_val = val
-                                time.sleep(1)
-                            else:
-                                break
-                        downloads = last_val
-                        print(f"获取到下载量: {downloads}")
-                        break # If successful, break out of the retry loop
-                    except (TimeoutException, NoSuchElementException, StaleElementReferenceException) as e:
-                        print(f"在 {driver.current_url} 页面获取下载量失败 (尝试 {attempt + 1}/{max_retries}): {e}")
-                        downloads = "0" # 最终失败，设为0
-                        if attempt == max_retries - 1: # If it's the last attempt, set downloads to "0"
-                            downloads = "0"
-                        else:
-                            time.sleep(2) # Wait before retrying
-
-            results.append({
-                "date": today,
-                "repo": "GitCode",
-                "model_name": model_name,
-                "publisher": "飞桨PaddlePaddle",
-                "download_count": downloads,
-                "model_category": classify_model(model_name, "飞桨PaddlePaddle", None),
-                "url": model_link,  # 模型详情页URL（从链接列表获取）
-                "last_modified": None,  # 🔧 新增：GitCode不提供更新时间字段
-                "created_at": None  # 🔧 新增：GitCode不提供创建时间字段
-            })
-
-        except Exception as e:
-            print(f"获取 {model_link} 失败: {e}")
-
-        if progress_callback:
-            progress_callback(i, discovered_total=total_count)
-
-    driver.quit()
-
-    df = pd.DataFrame(
-        results,
-        columns=["date", "repo", "model_name", "publisher", "download_count",
-                 "model_category", "url", "last_modified", "created_at"]
+    df, total_count = GitCodeFetcher().fetch(
+        progress_callback=progress_callback,
+        progress_total=progress_total,
     )
     df['download_count'] = pd.to_numeric(df['download_count'], errors='coerce').fillna(0).astype(int)
     return df, total_count
@@ -551,6 +421,15 @@ def fetch_gitee_data_unified(progress_callback=None, progress_total=None):
     return fetcher.fetch(progress_callback=progress_callback, progress_total=progress_total)
 
 
+# Civitai
+def fetch_civitai_data_unified(progress_callback=None, progress_total=None):
+    """统一获取Civitai上的ERNIE相关模型"""
+    from .fetchers_civitai import CivitaiFetcher
+
+    fetcher = CivitaiFetcher()
+    return fetcher.fetch(progress_callback=progress_callback, progress_total=progress_total)
+
+
 # 统一的平台抓取器字典
 UNIFIED_PLATFORM_FETCHERS = {
     "Hugging Face": fetch_hugging_face_data_unified,
@@ -560,6 +439,7 @@ UNIFIED_PLATFORM_FETCHERS = {
     "鲸智": fetch_caict_data_unified,
     "魔乐 Modelers": fetch_modelers_data_unified,
     "Gitee": fetch_gitee_data_unified,
+    "Civitai": fetch_civitai_data_unified,
 }
 
 

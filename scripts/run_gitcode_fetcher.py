@@ -1,4 +1,9 @@
 import pandas as pd
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from ernie_tracker.fetchers.fetchers import fetch_gitcode_data
 
 if __name__ == "__main__":

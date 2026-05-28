@@ -47,7 +47,8 @@ GITCODE_MODEL_LINKS = [
     "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-300B-A47B-Base-PT",
     "https://ai.gitcode.com/paddlepaddle/ERNIE-4.5-300B-A47B-W4A8C8-TP4-Paddle",
     "https://ai.gitcode.com/paddlepaddle/ERNIE-Image",
-    "https://ai.gitcode.com/paddlepaddle/ERNIE-Image-Turbo"
+    "https://ai.gitcode.com/paddlepaddle/ERNIE-Image-Turbo",
+    "https://ai.gitcode.com/paddlepaddle/PaddleOCR-VL"
 ]
 
 # CAICT (鲸智) 模型链接列表
@@ -87,5 +88,6 @@ PLATFORM_NAMES = {
     "gitcode": "GitCode",
     "caict": "鲸智",
     "modelers": "魔乐 Modelers",
-    "gitee": "Gitee"
+    "gitee": "Gitee",
+    "civitai": "Civitai"
 }
