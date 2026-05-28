@@ -927,7 +927,7 @@ if page == "📥 数据更新":
 
     # 初始化 session_state
     if "select_all" not in st.session_state:
-        st.session_state.select_all = False
+        st.session_state.select_all = True
 
     # 平台选择
     with st.container():
@@ -1175,6 +1175,12 @@ elif page == "📊 ERNIE-4.5 分析":
             saved_previous_date = st.session_state.get('previous_date', previous_date)
 
             st.success(f"✅ 周报生成成功！对比时间段：{saved_previous_date} → {saved_current_date}")
+
+            stale_platform_df = tables.get('stale_platform_warnings')
+            if stale_platform_df is not None and not stale_platform_df.empty:
+                st.markdown("### ⚠️ 平台数据缺失提醒")
+                st.warning("当前日期缺少部分平台的当日抓取数据，相关平台的周增可能显示为 0。")
+                st.dataframe(stale_platform_df, use_container_width=True)
 
             # 检查并显示负增长警告
             warnings_df = tables.get('negative_growth_warnings')
@@ -1511,6 +1517,12 @@ elif page == "📊 PaddleOCR-VL 分析":
 
                 st.success(f"✅ 周报生成成功！对比时间段：{previous_date} → {current_date}")
 
+                stale_platform_df = tables.get('stale_platform_warnings')
+                if stale_platform_df is not None and not stale_platform_df.empty:
+                    st.markdown("### ⚠️ 平台数据缺失提醒")
+                    st.warning("当前日期缺少部分平台的当日抓取数据，相关平台的周增可能显示为 0。")
+                    st.dataframe(stale_platform_df, use_container_width=True)
+
                 # 保存关键数据到session_state，用于重新获取功能
                 st.session_state['current_date'] = current_date
                 st.session_state['previous_date'] = previous_date
@@ -1827,12 +1839,12 @@ elif page == "📊 PaddleOCR-VL 分析":
 
                 excel_data = output.getvalue()
 
-        st.download_button(
-            label="📥 下载 PaddleOCR-VL 完整周报 (Excel)",
-            data=excel_data,
-            file_name=f"PaddleOCR-VL_周报_{previous_date}_to_{current_date}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+                st.download_button(
+                    label="📥 下载 PaddleOCR-VL 完整周报 (Excel)",
+                    data=excel_data,
+                    file_name=f"PaddleOCR-VL_周报_{saved_previous_date}_to_{saved_current_date}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
 # ================= ERNIE-Image 数据分析模块 =================
 elif page == "📊 ERNIE-Image 分析":
@@ -1881,8 +1893,8 @@ elif page == "📊 ERNIE-Image 分析":
                 st.error("❌ 无法生成周报，请检查选择的日期是否有数据。")
             else:
                 st.session_state['report_data_ernie_image'] = report_data
-                st.session_state['ernie_image_current_date'] = current_date
-                st.session_state['ernie_image_previous_date'] = previous_date
+                st.session_state['ernie_image_saved_current_date'] = current_date
+                st.session_state['ernie_image_saved_previous_date'] = previous_date
                 st.rerun()
 
         report_data = st.session_state.get('report_data_ernie_image')
@@ -1890,10 +1902,16 @@ elif page == "📊 ERNIE-Image 分析":
         if report_data is not None:
             tables = format_report_tables(report_data)
 
-            saved_current_date = st.session_state.get('ernie_image_current_date', current_date)
-            saved_previous_date = st.session_state.get('ernie_image_previous_date', previous_date)
+            saved_current_date = st.session_state.get('ernie_image_saved_current_date', current_date)
+            saved_previous_date = st.session_state.get('ernie_image_saved_previous_date', previous_date)
 
             st.success(f"✅ 周报生成成功！对比时间段：{saved_previous_date} → {saved_current_date}")
+
+            stale_platform_df = tables.get('stale_platform_warnings')
+            if stale_platform_df is not None and not stale_platform_df.empty:
+                st.markdown("### ⚠️ 平台数据缺失提醒")
+                st.warning("当前日期缺少部分平台的当日抓取数据，相关平台的周增可能显示为 0。")
+                st.dataframe(stale_platform_df, use_container_width=True)
 
             warnings_df = tables.get('negative_growth_warnings')
             if warnings_df is not None and not warnings_df.empty:
@@ -2972,7 +2990,7 @@ elif page == "🗄️ 数据库管理":
         # 平台选择
         whitelist_platform = st.selectbox(
             "选择平台 *",
-            options=["Hugging Face", "ModelScope", "AI Studio", "GitCode"],
+            options=["Hugging Face", "ModelScope", "AI Studio", "GitCode", "Civitai"],
             key="whitelist_platform",
             help="选择模型所在的平台"
         )
@@ -3043,7 +3061,8 @@ elif page == "🗄️ 数据库管理":
             url_placeholder = {
                 "Hugging Face": "https://huggingface.co/publisher/model-name",
                 "ModelScope": "https://modelscope.cn/models/publisher/model-name",
-                "GitCode": "https://gitcode.com/publisher/model-name"
+                "GitCode": "https://gitcode.com/publisher/model-name",
+                "Civitai": "https://civitai.com/models/123456"
             }
 
             col_url, col_cat = st.columns([3, 1])
@@ -3075,7 +3094,8 @@ elif page == "🗄️ 数据库管理":
                         platform_domains = {
                             "Hugging Face": "huggingface.co",
                             "ModelScope": "modelscope.cn",
-                            "GitCode": "gitcode.com"
+                            "GitCode": "gitcode.com",
+                            "Civitai": "civitai.com"
                         }
                         expected_domain = platform_domains.get(whitelist_platform)
                         if expected_domain and expected_domain not in model_url:
@@ -3200,10 +3220,14 @@ elif page == "🗄️ 数据库管理":
 
 # ================= 整体对标统计模块 =================
 elif page == "📈 整体对标统计":
-    from ernie_tracker.analysis import get_available_dates, calculate_weekly_report
+    from ernie_tracker.analysis import (
+        get_available_dates,
+        calculate_weekly_report,
+        get_default_comparison_date_index,
+    )
 
     st.markdown("## 📈 整体对标统计")
-    st.info("📊 ERNIE-4.5 和 PaddleOCR-VL 两个系列的整体数据对标。")
+    st.info("📊 ERNIE-4.5、PaddleOCR-VL、ERNIE-Image 三个系列的整体数据对标。")
 
     # 获取可用日期
     available_dates = get_available_dates()
@@ -3223,25 +3247,26 @@ elif page == "📈 整体对标统计":
             )
 
         with col2:
-            # 默认上周日期
-            default_prev_idx = min(7, len(available_dates) - 1)
+            default_prev_idx = get_default_comparison_date_index(available_dates, current_date)
             previous_date = st.selectbox(
                 "📅 选择对比日期",
                 options=available_dates,
                 index=default_prev_idx,
-                help="选择要对比的历史日期（通常选择7天前）"
+                help="默认选择当前日期的上一周周五；如无该数据点，则选择最接近的日期"
             )
 
         if st.button("🔍 生成统计报告", type="primary"):
             with st.spinner("正在生成统计报告..."):
-                # 分别获取两个系列的数据
+                # 分别获取三个系列的数据
                 ernie_report = calculate_weekly_report(current_date, previous_date, model_series='ERNIE-4.5')
                 ocr_report = calculate_weekly_report(current_date, previous_date, model_series='PaddleOCR-VL')
+                image_report = calculate_weekly_report(current_date, previous_date, model_series='ERNIE-Image')
 
                 # 保存到 session_state
                 st.session_state['overall_report'] = {
                     'ernie': ernie_report,
                     'ocr': ocr_report,
+                    'image': image_report,
                     'current_date': current_date,
                     'previous_date': previous_date
                 }
@@ -3252,6 +3277,7 @@ elif page == "📈 整体对标统计":
             report = st.session_state['overall_report']
             ernie_report = report['ernie']
             ocr_report = report['ocr']
+            image_report = report.get('image')
             saved_current_date = report['current_date']
             saved_previous_date = report['previous_date']
 
@@ -3263,13 +3289,24 @@ elif page == "📈 整体对标统计":
                 ernie_stats = ernie_report['summary_stats']
                 ocr_stats = ocr_report['summary_stats']
 
-                # 计算加总数据
-                total_all_current = ernie_stats['all_current_total'] + ocr_stats['all_current_total']
-                total_all_growth = ernie_stats['all_growth'] + ocr_stats['all_growth']
-                total_official_current = ernie_stats['official_current_total'] + ocr_stats['official_current_total']
-                total_official_growth = ernie_stats['official_growth'] + ocr_stats['official_growth']
-                total_derivative_current = ernie_stats['derivative_current_total'] + ocr_stats['derivative_current_total']
-                total_derivative_growth = ernie_stats['derivative_growth'] + ocr_stats['derivative_growth']
+                # ERNIE-Image 可能无数据，用零值兜底
+                if image_report and image_report.get('summary_stats'):
+                    image_stats = image_report['summary_stats']
+                else:
+                    image_stats = {
+                        'all_current_total': 0, 'all_growth': 0,
+                        'official_current_total': 0, 'official_growth': 0,
+                        'derivative_current_total': 0, 'derivative_growth': 0,
+                    }
+
+                # 计算加总数据（三个系列）
+                all_stats = [ernie_stats, ocr_stats, image_stats]
+                total_all_current = sum(s['all_current_total'] for s in all_stats)
+                total_all_growth = sum(s['all_growth'] for s in all_stats)
+                total_official_current = sum(s['official_current_total'] for s in all_stats)
+                total_official_growth = sum(s['official_growth'] for s in all_stats)
+                total_derivative_current = sum(s['derivative_current_total'] for s in all_stats)
+                total_derivative_growth = sum(s['derivative_growth'] for s in all_stats)
 
                 # 格式化函数
                 def format_num(n):
@@ -3287,7 +3324,7 @@ elif page == "📈 整体对标统计":
                 # 显示加总摘要
                 st.markdown("### 📝 整体对标结果")
                 summary_text = f"""
-截至 **{saved_current_date}**，ERNIE-4.5 和 PaddleOCR-VL 累计下载 **{format_num(total_all_current)}** 次
+截至 **{saved_current_date}**，ERNIE-4.5、PaddleOCR-VL、ERNIE-Image 累计下载 **{format_num(total_all_current)}** 次
 （含官方模型 **{format_num(total_official_current)}** 次，占比 **{format_percent(official_percent)}**，
 衍生 **{format_num(total_derivative_current)}** 次，占比 **{format_percent(derivative_percent)}**），
 较上周增长 **{format_num(total_all_growth)}** 次
@@ -3295,6 +3332,23 @@ elif page == "📈 整体对标统计":
 衍生模型增长 **{format_num(total_derivative_growth)}** 次，占比 **{format_percent(derivative_growth_percent)}**）。
                 """
                 st.info(summary_text)
+
+                # 分系列明细
+                st.markdown("### 📋 分系列明细")
+                series_data = []
+                for name, stats in [('ERNIE-4.5', ernie_stats), ('PaddleOCR-VL', ocr_stats), ('ERNIE-Image', image_stats)]:
+                    series_data.append({
+                        '系列': name,
+                        '累计下载': stats['all_current_total'],
+                        '本周增长': stats['all_growth'],
+                        '官方下载': stats['official_current_total'],
+                        '官方增长': stats['official_growth'],
+                        '衍生下载': stats['derivative_current_total'],
+                        '衍生增长': stats['derivative_growth'],
+                    })
+                import pandas as pd
+                series_df = pd.DataFrame(series_data).set_index('系列')
+                st.dataframe(series_df, use_container_width=True)
 
 
 
@@ -3305,6 +3359,7 @@ elif page == "🌳 衍生模型生态":
         analyze_derivative_models_all_platforms,
         calculate_recent_derivative_velocity_top,
         calculate_periodic_stats,
+        calculate_weekly_derivative_threshold_breakthroughs,
         get_deleted_derivative_models_all_platforms,
         get_models_needing_backfill
     )
@@ -3313,7 +3368,7 @@ elif page == "🌳 衍生模型生态":
     from io import BytesIO
 
     st.markdown("## 🌳 衍生模型生态分析（全平台）")
-    st.info("📊 分析全平台（Hugging Face、ModelScope、AI Studio、GitCode、鲸智、魔乐、Gitee）的衍生模型生态。衍生模型定义：非官方发布者发布的模型。")
+    st.info("📊 分析全平台（Hugging Face、ModelScope、AI Studio、GitCode、鲸智、魔乐、Gitee、Civitai）的衍生模型生态。衍生模型定义：非官方发布者发布的模型。")
 
     # 获取可用日期
     available_dates = get_available_dates()
@@ -3321,19 +3376,15 @@ elif page == "🌳 衍生模型生态":
     if not available_dates:
         st.warning("⚠️ 数据库中暂无数据，请先在「数据更新」页面抓取数据。")
     else:
-        # 配置选项：计算默认的上周五
+        # 配置选项：默认使用最新可用日期和约一周前的可用日期
         from datetime import datetime as _dt, timedelta as _td
-        today = _dt.now()
-        # 上周五：往前推到最近的周五（如果今天是周五则取上一个周五）
-        days_since_friday = (today.weekday() - 4) % 7
-        if days_since_friday == 0:
-            days_since_friday = 7
-        last_friday = (today - _td(days=days_since_friday)).strftime('%Y-%m-%d')
 
-        # 找到最接近上周五的可用日期作为默认起始日期
-        default_base_idx = 0
+        # 找到最接近“最新可用日期往前一周”的日期作为默认起始日期
+        latest_available = _dt.strptime(available_dates[0], '%Y-%m-%d')
+        target_base_date = (latest_available - _td(days=7)).strftime('%Y-%m-%d')
+        default_base_idx = 1 if len(available_dates) > 1 else 0
         for i, d in enumerate(available_dates):
-            if d <= last_friday:
+            if d <= target_base_date:
                 default_base_idx = i
                 break
 
@@ -3512,7 +3563,50 @@ elif page == "🌳 衍生模型生态":
 
                     st.markdown("---")
 
-                    # ========== 3. 已删除模型检测 ==========
+                    # ========== 3. 本周下载量突破阈值 ==========
+                    st.markdown("### 🎯 本周下载量突破阈值")
+                    st.caption("口径说明：非官方衍生模型；对比起始日期和终止日期的累计下载量快照，统计本周刚跨过阈值的模型。quantized/无类型 tag 阈值为 500，finetune/lora/adapter 阈值为 100。")
+
+                    with st.spinner("正在计算本周突破阈值模型..."):
+                        threshold_breakthroughs_df = calculate_weekly_derivative_threshold_breakthroughs(
+                            current_date=selected_date,
+                            previous_date=base_date,
+                            selected_series=selected_series
+                        )
+
+                    if threshold_breakthroughs_df.empty:
+                        st.info(f"✅ {base_date} → {selected_date} 期间暂无衍生模型刚突破统计阈值")
+                    else:
+                        display_breakthroughs_df = threshold_breakthroughs_df.rename(columns={
+                            'model_name': '模型名称',
+                            'publisher': '发布者',
+                            'repo': '平台',
+                            'model_category': '模型系列',
+                            'model_type': '模型类型',
+                            'previous_download_count': '起始下载量',
+                            'current_download_count': '当前下载量',
+                            'weekly_growth': '本周增量',
+                            'threshold': '阈值',
+                            'matched_rule': '命中规则',
+                            'base_model': 'Base Model',
+                            'url': '模型URL'
+                        }).reset_index(drop=True)
+                        display_breakthroughs_df.index = display_breakthroughs_df.index + 1
+
+                        rule_counts = threshold_breakthroughs_df['matched_rule'].value_counts()
+                        col_threshold1, col_threshold2, col_threshold3 = st.columns(3)
+                        with col_threshold1:
+                            st.metric("突破模型数", f"{len(threshold_breakthroughs_df):,}")
+                        with col_threshold2:
+                            st.metric("500 阈值", f"{int(rule_counts.get('quantized > 500', 0) + rule_counts.get('无类型 tag > 500', 0)):,}")
+                        with col_threshold3:
+                            st.metric("100 阈值", f"{int(rule_counts.get('finetune/lora/adapter > 100', 0)):,}")
+
+                        st.dataframe(display_breakthroughs_df, use_container_width=True, height=360)
+
+                    st.markdown("---")
+
+                    # ========== 4. 已删除模型检测 ==========
                     st.markdown("### 🗑️ 已删除模型")
 
                     # 使用之前已经获取的 deleted_models
@@ -3529,7 +3623,7 @@ elif page == "🌳 衍生模型生态":
 
                     st.markdown("---")
 
-                    # ========== 4. 需要回填的模型 ==========
+                    # ========== 5. 需要回填的模型 ==========
                     st.markdown("### 🔄 需要回填的模型")
 
                     with st.spinner("正在检测需要回填的模型..."):
@@ -3558,7 +3652,7 @@ elif page == "🌳 衍生模型生态":
 
                     st.markdown("---")
 
-                    # ========== 5. 按平台统计 ==========
+                    # ========== 6. 按平台统计 ==========
                     st.markdown("### 🌍 按平台统计")
 
                     if analysis_result['by_platform']:
@@ -3656,17 +3750,22 @@ elif page == "🌳 衍生模型生态":
 
                         st.markdown("---")
 
-                    # 预加载原始历史数据，供“近两个月发布模型下载效率榜”和“详细列表首见日期”共用
+                    # 预加载原始历史数据，供”近两个月发布模型下载效率榜”和”详细列表首见日期”共用
                     from ernie_tracker.db import load_data_from_db
                     raw_df = load_data_from_db(last_value_per_model=False)
 
                     # ========== 7. 近两个月发布模型的平均日下载 Top 10 ==========
                     st.markdown("### 🚀 近两个月发布模型：平均日下载 Top 10")
-                    st.caption(f"口径说明：仅统计相对 {selected_date} 往前两个月内发布的衍生模型；发布时间优先取 created_at，缺失时回退到首次入库日期；平均单位时长按“平均日下载量”计算。")
+                    st.caption(f"口径说明：仅统计相对 {selected_date} 往前两个月内发布的衍生模型；发布时间优先取 created_at，缺失时回退到首次入库日期；平均单位时长按「平均日下载量」计算。")
 
+                    # 仅传入截止 selected_date 的历史数据，确保首次入库日期不受未来记录影响
+                    raw_df_for_velocity = (
+                        raw_df[raw_df['date'] <= selected_date].copy()
+                        if not raw_df.empty else raw_df
+                    )
                     recent_velocity_full_df = calculate_recent_derivative_velocity_top(
                         analysis_result['derivative_models_df'],
-                        raw_df,
+                        raw_df_for_velocity,
                         selected_date=selected_date,
                         months=2,
                         top_n=None
@@ -3861,7 +3960,11 @@ elif page == "🌳 衍生模型生态":
                                     recent_velocity_full_df.head(10).to_excel(writer, sheet_name='近两个月发布Top10', index=False)
                                     recent_velocity_full_df.to_excel(writer, sheet_name='近两个月发布完整榜单', index=False)
 
-                                # Sheet 5: 衍生模型列表（导出当前筛选结果，包含所有字段）
+                                # Sheet 5: 本周下载量突破阈值
+                                if not threshold_breakthroughs_df.empty:
+                                    threshold_breakthroughs_df.to_excel(writer, sheet_name='本周突破阈值模型', index=False)
+
+                                # Sheet 6: 衍生模型列表（导出当前筛选结果，包含所有字段）
                                 export_df = display_df.copy()
                                 # 移除临时排序列
                                 if 'download_count_num' in export_df.columns:

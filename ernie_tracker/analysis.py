@@ -17,7 +17,8 @@ OFFICIAL_RULES = {
     'GitCode': '飞桨PaddlePaddle',
     '鲸智': 'PaddlePaddle',
     '魔乐 Modelers': 'PaddlePaddle',
-    'Gitee': 'PaddlePaddle'
+    'Gitee': 'PaddlePaddle',
+    'Civitai': 'baidu'
 }
 
 # 模型顺序（按重要性排列）
@@ -69,10 +70,10 @@ SERIES_TO_CATEGORY = {
 }
 
 # 平台顺序
-REPO_ORDER = ['Hugging Face', 'AI Studio', 'ModelScope', 'GitCode', '其他']
+REPO_ORDER = ['Hugging Face', 'AI Studio', 'ModelScope', 'GitCode', 'Civitai', '其他']
 
 # 详细平台顺序（不合并"其他"）
-REPO_ORDER_DETAILED = ['Hugging Face', 'AI Studio', 'ModelScope', 'GitCode', '魔乐 Modelers', '鲸智', 'Gitee']
+REPO_ORDER_DETAILED = ['Hugging Face', 'AI Studio', 'ModelScope', 'GitCode', 'Civitai', '魔乐 Modelers', '鲸智', 'Gitee']
 
 # 官方模型累计下载量口径：仅统计 2026-03-11 及之后出现的历史最大值
 # （“2026-03-10 之后”按不含 2026-03-10 解释）
@@ -121,6 +122,60 @@ def get_available_dates():
     df = pd.read_sql_query(query, conn)
     conn.close()
     return df['date'].tolist()
+
+
+def get_closest_date_index(available_dates, target_date, current_date=None):
+    """
+    获取最接近目标日期的可用日期索引。
+
+    当 current_date 存在时，优先选择不晚于 current_date 的其他日期，避免默认对比日期
+    落到当前日期之后或等于当前日期。
+    """
+    if not available_dates:
+        return 0
+
+    target_dt = datetime.strptime(target_date, '%Y-%m-%d')
+    current_dt = datetime.strptime(current_date, '%Y-%m-%d') if current_date else None
+
+    candidates = []
+    for index, available_date in enumerate(available_dates):
+        try:
+            available_dt = datetime.strptime(available_date, '%Y-%m-%d')
+        except ValueError:
+            continue
+
+        if current_dt and available_dt > current_dt:
+            continue
+        if current_date and available_date == current_date and len(available_dates) > 1:
+            continue
+
+        candidates.append((index, available_dt))
+
+    if not candidates:
+        candidates = [
+            (index, datetime.strptime(available_date, '%Y-%m-%d'))
+            for index, available_date in enumerate(available_dates)
+        ]
+
+    best_index, _ = min(
+        candidates,
+        key=lambda item: (
+            abs((item[1] - target_dt).days),
+            item[1] > target_dt,
+            -item[1].timestamp(),
+        )
+    )
+    return best_index
+
+
+def get_default_comparison_date_index(available_dates, current_date):
+    """
+    获取默认对比日期索引：当前日期的上一周周五；如无该数据点，则取最接近的数据点。
+    """
+    target_previous = get_last_friday(current_date)
+    if target_previous in available_dates:
+        return available_dates.index(target_previous)
+    return get_closest_date_index(available_dates, target_previous, current_date=current_date)
 
 
 def normalize_model_names(data):
@@ -491,6 +546,19 @@ def calculate_weekly_report(current_date=None, previous_date=None, model_order=N
     # 负增长检测仍然使用真实的当日记录（不做历史峰值回填）
     warn_current_raw = load_data_from_db(date_filter=current_date, last_value_per_model=False)
     warn_previous_raw = load_data_from_db(date_filter=previous_date, last_value_per_model=False)
+    stale_platform_warnings = []
+    if not warn_previous_raw.empty:
+        current_repos = set(warn_current_raw['repo'].dropna().astype(str)) if not warn_current_raw.empty else set()
+        previous_repos = set(warn_previous_raw['repo'].dropna().astype(str))
+        for repo in REPO_ORDER_DETAILED:
+            if repo in previous_repos and repo not in current_repos:
+                stale_platform_warnings.append({
+                    'platform': repo,
+                    'previous_date': previous_date,
+                    'current_date': current_date,
+                    'message': f'{current_date} 缺少 {repo} 当日抓取数据，周增可能被历史峰值快照兜底为 0'
+                })
+
     warn_current_raw = filter_by_series(
         enforce_deduplication_and_standardization(warn_current_raw),
         model_series
@@ -508,6 +576,19 @@ def calculate_weekly_report(current_date=None, previous_date=None, model_order=N
 
     if full_data.empty:
         return None
+
+    current_series_repos = set(warn_current_raw['repo'].dropna().astype(str)) if not warn_current_raw.empty else set()
+    historical_series_repos = set(full_data['repo'].dropna().astype(str))
+    existing_stale_repos = {item['platform'] for item in stale_platform_warnings}
+    for repo in REPO_ORDER_DETAILED:
+        if repo in historical_series_repos and repo not in current_series_repos and repo not in existing_stale_repos:
+            stale_platform_warnings.append({
+                'platform': repo,
+                'previous_date': previous_date,
+                'current_date': current_date,
+                'message': f'{current_date} 缺少 {repo} 当日抓取数据，周增可能被历史峰值快照兜底为 0'
+            })
+            existing_stale_repos.add(repo)
 
     # 标记官方模型
     full_data = mark_official_models(full_data)
@@ -884,7 +965,8 @@ def calculate_weekly_report(current_date=None, previous_date=None, model_order=N
         'platform_summary': platform_summary,
         'new_models_info': new_models_info,  # 新增Finetune/Adapter/LoRA模型信息
         'all_new_models_info': all_new_models_info,  # 🆕 所有新增模型完整列表
-        'negative_growth_warnings': negative_growth_warnings  # 负增长警告
+        'negative_growth_warnings': negative_growth_warnings,  # 负增长警告
+        'stale_platform_warnings': stale_platform_warnings
     }
 
 
@@ -1025,6 +1107,16 @@ def format_report_tables(report_data):
         tables['negative_growth_warnings'] = warnings_df
     else:
         tables['negative_growth_warnings'] = pd.DataFrame(columns=['平台', '模型名称', '发布者', '模型类型', '上周下载量', '本周下载量', '周增长'])
+
+    stale_platform_warnings = report_data.get('stale_platform_warnings', [])
+    if stale_platform_warnings:
+        stale_df = pd.DataFrame(stale_platform_warnings)
+        stale_df.index = stale_df.index + 1
+        stale_df = stale_df[['platform', 'previous_date', 'current_date', 'message']]
+        stale_df.columns = ['平台', '对比日期', '当前日期', '说明']
+        tables['stale_platform_warnings'] = stale_df
+    else:
+        tables['stale_platform_warnings'] = pd.DataFrame(columns=['平台', '对比日期', '当前日期', '说明'])
 
     # 10. 🆕 所有新增模型完整列表
     all_new_models_info = report_data.get('all_new_models_info', {})
@@ -1541,6 +1633,128 @@ def calculate_recent_derivative_velocity_top(
         'avg_downloads_per_day',
         'url'
     ]].copy()
+
+
+def calculate_weekly_derivative_threshold_breakthroughs(
+    current_date,
+    previous_date,
+    selected_series=None
+):
+    """
+    统计本周下载量刚突破阈值的衍生模型。
+
+    口径：
+    - 仅统计非官方发布者的衍生模型
+    - 使用起止日期的历史最大值快照做对比，避免某天抓取缺失导致误判
+    - quantized 或无类型 tag：当前累计下载量 > 500，且基准累计下载量 <= 500
+    - finetune/lora/adapter：当前累计下载量 > 100，且基准累计下载量 <= 100
+    """
+    full_data = load_data_from_db(date_filter=None, last_value_per_model=False)
+    if full_data.empty:
+        return pd.DataFrame()
+
+    full_data = enforce_deduplication_and_standardization(full_data)
+
+    if selected_series:
+        filtered_parts = []
+        for series in selected_series:
+            filtered_parts.append(filter_by_series(full_data, series))
+        full_data = pd.concat(filtered_parts, ignore_index=True).drop_duplicates(
+            subset=['date', 'repo', '_dedup_publisher', '_dedup_model_name'],
+            keep='first'
+        )
+
+    if full_data.empty:
+        return pd.DataFrame()
+
+    full_data = mark_official_models(full_data)
+    derivative_data = full_data[full_data['is_official'] == False].copy()
+    if derivative_data.empty:
+        return pd.DataFrame()
+
+    current_snapshot = build_peak_snapshot(derivative_data, current_date)
+    previous_snapshot = build_peak_snapshot(derivative_data, previous_date)
+
+    if current_snapshot.empty:
+        return pd.DataFrame()
+
+    key_cols = ['repo', '_dedup_publisher', '_dedup_model_name']
+    current_cols = [
+        'repo', '_dedup_publisher', '_dedup_model_name',
+        'publisher', 'model_name', 'download_count',
+        'model_category', 'model_type', 'base_model', 'url'
+    ]
+    current_cols = [col for col in current_cols if col in current_snapshot.columns]
+    current_df = current_snapshot[current_cols].copy()
+    current_df = current_df.rename(columns={'download_count': 'current_download_count'})
+
+    if previous_snapshot.empty:
+        previous_df = pd.DataFrame(columns=key_cols + ['previous_download_count'])
+    else:
+        previous_df = previous_snapshot[key_cols + ['download_count']].copy()
+        previous_df = previous_df.rename(columns={'download_count': 'previous_download_count'})
+
+    merged = current_df.merge(previous_df, on=key_cols, how='left')
+    merged['current_download_count'] = pd.to_numeric(
+        merged['current_download_count'], errors='coerce'
+    ).fillna(0).astype(int)
+    merged['previous_download_count'] = pd.to_numeric(
+        merged['previous_download_count'], errors='coerce'
+    ).fillna(0).astype(int)
+    merged['weekly_growth'] = merged['current_download_count'] - merged['previous_download_count']
+
+    def normalize_type(value):
+        if pd.isna(value):
+            return ''
+        return str(value).strip().lower()
+
+    if 'model_type' not in merged.columns:
+        merged['model_type'] = ''
+    merged['_normalized_model_type'] = merged['model_type'].apply(normalize_type)
+
+    quantized_or_untagged_mask = (
+        (merged['_normalized_model_type'] == 'quantized') |
+        (merged['_normalized_model_type'] == '')
+    )
+    tuned_mask = merged['_normalized_model_type'].isin([
+        'finetune', 'fine-tune', 'fine_tune', 'lora', 'adapter', 'adaptor', '适配', '微调'
+    ])
+
+    quantized_or_untagged = merged[
+        quantized_or_untagged_mask &
+        (merged['current_download_count'] > 500) &
+        (merged['previous_download_count'] <= 500)
+    ].copy()
+    quantized_or_untagged['threshold'] = 500
+    quantized_or_untagged['matched_rule'] = quantized_or_untagged['_normalized_model_type'].apply(
+        lambda model_type: 'quantized > 500' if model_type == 'quantized' else '无类型 tag > 500'
+    )
+
+    tuned = merged[
+        tuned_mask &
+        (merged['current_download_count'] > 100) &
+        (merged['previous_download_count'] <= 100)
+    ].copy()
+    tuned['threshold'] = 100
+    tuned['matched_rule'] = 'finetune/lora/adapter > 100'
+
+    result = pd.concat([quantized_or_untagged, tuned], ignore_index=True)
+    if result.empty:
+        return pd.DataFrame()
+
+    result['model_type'] = result.get('model_type', '').fillna('')
+    result = result.sort_values(
+        by=['threshold', 'current_download_count', 'weekly_growth'],
+        ascending=[False, False, False]
+    ).reset_index(drop=True)
+
+    output_cols = [
+        'model_name', 'publisher', 'repo', 'model_category', 'model_type',
+        'previous_download_count', 'current_download_count', 'weekly_growth',
+        'threshold', 'matched_rule', 'base_model', 'url'
+    ]
+    output_cols = [col for col in output_cols if col in result.columns]
+    return result[output_cols].copy()
 
 
 def get_quarter_start_date(current_date):
